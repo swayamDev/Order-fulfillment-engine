@@ -11,8 +11,8 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run --project unit",
-    "test:integration": "vitest run --project integration",
+    "test": "vitest run --project unit --passWithNoTests",
+    "test:integration": "vitest run --project integration --passWithNoTests",
     "check:repo": "node scripts/check-repo.ts"
   },
   "devDependencies": {
