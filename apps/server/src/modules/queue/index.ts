@@ -6,6 +6,9 @@ export {
   LOOP_BACKOFF,
   PermanentJobError,
   Worker,
+  deadLetter,
+  retryLater,
   type JobHandler,
+  type JobOutcome,
   type WorkerOptions,
 } from './worker.ts';

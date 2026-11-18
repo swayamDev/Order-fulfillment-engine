@@ -3,8 +3,10 @@ import { appDb, createTestSandbox, ownerDb, seedProduct } from '@sethu/db/testin
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  deadLetter,
   enqueue,
   PermanentJobError,
+  retryLater,
   Worker,
   type JobHandler,
 } from '../../src/modules/queue/index.ts';
@@ -277,6 +279,81 @@ describe('job queue', () => {
       attempts: 1,
       last_error: 'payload is missing order_id',
     });
+  });
+
+  it("commits a deferring handler's writes and requeues the job", async () => {
+    const sandbox = await createTestSandbox(owner);
+    await addJobs(sandbox, 'defer', 1);
+    const worker = new Worker({
+      db,
+      id: 'defer',
+      random: () => 0,
+      handlers: handlers({
+        defer: async (tx, job) => {
+          await tx
+            .insertInto('processed_messages')
+            .values({ consumer: `note-${job.attempts}`, message_id: job.id, sandbox_id: sandbox })
+            .execute();
+          return retryLater('waiting for sequence 1');
+        },
+      }),
+    });
+    expect(await worker.runOnce()).toBe(1);
+    const [job] = await jobsIn(sandbox, 'defer');
+    expect(job).toMatchObject({
+      status: 'queued',
+      attempts: 1,
+      last_error: 'waiting for sequence 1',
+    });
+    const notes = await withSandbox(owner, sandbox, (tx) =>
+      tx.selectFrom('processed_messages').select('consumer').execute(),
+    );
+    expect(notes).toEqual([{ consumer: 'note-1' }]);
+  });
+
+  it('dead-letters a job that keeps deferring once its attempts run out', async () => {
+    const sandbox = await createTestSandbox(owner);
+    await withSandbox(db, sandbox, (tx) =>
+      enqueue(tx, { sandboxId: sandbox, queue: 'forever', payload: {}, maxAttempts: 3 }),
+    );
+    const worker = new Worker({
+      db,
+      id: 'forever',
+      random: () => 0,
+      handlers: handlers({ forever: () => Promise.resolve(retryLater('still waiting')) }),
+    });
+    for (let i = 0; i < 3; i++) await worker.runOnce();
+    const [job] = await jobsIn(sandbox, 'forever');
+    expect(job).toMatchObject({
+      status: 'dead',
+      attempts: 3,
+      last_error: 'gave up after 3 attempts: still waiting',
+    });
+  });
+
+  it('dead-letters on request, keeping what the handler wrote', async () => {
+    const sandbox = await createTestSandbox(owner);
+    await addJobs(sandbox, 'expired', 1);
+    const worker = new Worker({
+      db,
+      id: 'expired',
+      handlers: handlers({
+        expired: async (tx, job) => {
+          await tx
+            .insertInto('processed_messages')
+            .values({ consumer: 'dead-note', message_id: job.id, sandbox_id: sandbox })
+            .execute();
+          return deadLetter('held for more than 10 minutes');
+        },
+      }),
+    });
+    expect(await worker.runOnce()).toBe(1);
+    const [job] = await jobsIn(sandbox, 'expired');
+    expect(job).toMatchObject({ status: 'dead', last_error: 'held for more than 10 minutes' });
+    const notes = await withSandbox(owner, sandbox, (tx) =>
+      tx.selectFrom('processed_messages').select('consumer').execute(),
+    );
+    expect(notes).toEqual([{ consumer: 'dead-note' }]);
   });
 
   it('only deduplicates jobs within a sandbox', async () => {

@@ -6,7 +6,23 @@ import { Waker } from './waker.ts';
 /** How long a failing loop waits before trying the database again. */
 export const LOOP_BACKOFF: BackoffPolicy = { baseMs: 500, capMs: 30_000 };
 
-export type JobHandler = (tx: Tx, job: Job) => Promise<void>;
+/**
+ * What a handler can ask for besides success. Either is committed in the
+ * handler's own transaction, together with anything it wrote first (such as a
+ * "held" note on an order's timeline).
+ */
+export type JobOutcome =
+  | { readonly kind: 'retry'; readonly reason: string }
+  | { readonly kind: 'dead'; readonly reason: string };
+
+/** Try again after the usual backoff; dead-letter once attempts run out. */
+export const retryLater = (reason: string): JobOutcome => ({ kind: 'retry', reason });
+/** Give up now and put the job in the dead-letter queue with this reason. */
+export const deadLetter = (reason: string): JobOutcome => ({ kind: 'dead', reason });
+
+// Handlers that simply succeed are plain async functions returning void.
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type
+export type JobHandler = (tx: Tx, job: Job) => Promise<void | JobOutcome>;
 
 export interface WorkerOptions {
   readonly db: Db;
@@ -146,19 +162,8 @@ export class Worker {
       if (handler === undefined) throw new Error(`No handler for queue ${job.queue}`);
       await withSandbox(this.db, job.sandbox_id, async (tx) => {
         await this.holdLease(tx, job);
-        await handler(tx, job);
-        await tx
-          .updateTable('jobs')
-          .set({
-            status: 'succeeded',
-            locked_by: null,
-            locked_until: null,
-            last_error: null,
-            finished_at: sql<Date>`now()`,
-            updated_at: sql<Date>`now()`,
-          })
-          .where('id', '=', job.id)
-          .execute();
+        const outcome = await handler(tx, job);
+        await this.settle(tx, job, outcome ?? undefined);
       });
       this.onCommitted(job);
     } catch (error) {
@@ -186,33 +191,53 @@ export class Worker {
   }
 
   /**
-   * Retries with jittered backoff, or moves the job to the dead-letter queue
-   * when it has used its attempts or the error says retrying cannot help.
+   * Records how the job ended. Without an outcome it succeeded. A retry waits
+   * a jittered backoff, unless attempts are used up, in which case it joins
+   * the dead-letter queue like an explicit dead outcome.
    */
-  private async recordFailure(job: Job, error: unknown): Promise<void> {
-    const message = error instanceof Error ? error.message : String(error);
-    const dead = error instanceof PermanentJobError || job.attempts >= job.max_attempts;
-    const delayMs = dead ? 0 : backoffDelayMs(job.attempts, this.backoff, this.random);
-    const reason =
-      dead && !(error instanceof PermanentJobError)
-        ? `gave up after ${job.attempts} attempts: ${message}`
-        : message;
-    await withSandbox(this.db, job.sandbox_id, async (tx) => {
+  private async settle(tx: Tx, job: Job, outcome: JobOutcome | undefined): Promise<void> {
+    if (outcome === undefined) {
       await tx
         .updateTable('jobs')
         .set({
-          status: dead ? 'dead' : 'queued',
-          run_at: sql<Date>`now() + make_interval(secs => ${delayMs / 1000})`,
-          finished_at: dead ? sql<Date>`now()` : null,
-          last_error: reason.slice(0, 2000),
+          status: 'succeeded',
           locked_by: null,
           locked_until: null,
+          last_error: null,
+          finished_at: sql<Date>`now()`,
           updated_at: sql<Date>`now()`,
         })
         .where('id', '=', job.id)
-        .where('status', '=', 'running')
-        .where('locked_by', '=', this.id)
         .execute();
-    });
+      return;
+    }
+    const exhausted = outcome.kind === 'retry' && job.attempts >= job.max_attempts;
+    const dead = outcome.kind === 'dead' || exhausted;
+    const reason = exhausted
+      ? `gave up after ${job.attempts} attempts: ${outcome.reason}`
+      : outcome.reason;
+    const delayMs = dead ? 0 : backoffDelayMs(job.attempts, this.backoff, this.random);
+    await tx
+      .updateTable('jobs')
+      .set({
+        status: dead ? 'dead' : 'queued',
+        run_at: sql<Date>`now() + make_interval(secs => ${delayMs / 1000})`,
+        finished_at: dead ? sql<Date>`now()` : null,
+        last_error: reason.slice(0, 2000),
+        locked_by: null,
+        locked_until: null,
+        updated_at: sql<Date>`now()`,
+      })
+      .where('id', '=', job.id)
+      .where('status', '=', 'running')
+      .where('locked_by', '=', this.id)
+      .execute();
+  }
+
+  /** The handler threw: its transaction rolled back, so settle in a new one. */
+  private async recordFailure(job: Job, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    const outcome = error instanceof PermanentJobError ? deadLetter(message) : retryLater(message);
+    await withSandbox(this.db, job.sandbox_id, (tx) => this.settle(tx, job, outcome));
   }
 }
