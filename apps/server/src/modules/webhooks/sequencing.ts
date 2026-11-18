@@ -6,7 +6,8 @@
 //   sequence == last + 1  applied by the caller, which then calls releaseNext
 //   sequence >  last + 1  held: deferred with backoff and noted once on the
 //                         timeline, then dead-lettered as out_of_order_unresolved
-//                         after its attempts run out or MAX_HOLD_MS passes
+//                         after its attempts run out or it has been held for
+//                         MAX_HOLD_MS, whichever comes first
 
 import type { Order, Tx } from '@sethu/db';
 import { sql } from 'kysely';
@@ -49,7 +50,9 @@ export async function checkSequence(input: SequenceInput): Promise<SequenceVerdi
     return { kind: 'done' };
   }
 
-  const heldMs = Date.now() - event.receivedAt.getTime();
+  // Measured from when the event was first held, so a replay from the
+  // dead-letter queue (which clears held_at) gets a fresh window.
+  const heldMs = event.heldAt === null ? 0 : Date.now() - event.heldAt.getTime();
   const waiting = `${event.type} is sequence ${sequence} and needs sequence ${expected} first (${subject} has applied up to ${lastApplied})`;
   if (heldMs > MAX_HOLD_MS) {
     const reason = `out_of_order_unresolved: ${waiting}; held ${Math.round(heldMs / 60_000)} min, longer than the ${MAX_HOLD_MS / 60_000} min limit`;

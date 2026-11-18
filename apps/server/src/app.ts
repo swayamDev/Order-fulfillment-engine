@@ -7,6 +7,7 @@ import type { Config } from './config.ts';
 import { registerWriteGuards } from './http/guards.ts';
 import { problem } from './http/problem.ts';
 import { chaosRoutes } from './modules/chaos/index.ts';
+import { deadLetterRoutes } from './modules/dead-letters/index.ts';
 import { orderRoutes } from './modules/orders/index.ts';
 import { sandboxRoutes, SandboxTokenCodec } from './modules/sandbox/index.ts';
 import { simCourierRoutes, type SimCourierConfig } from './modules/sim-courier/index.ts';
@@ -69,6 +70,7 @@ export async function buildApp({
   const requireSandbox = sandboxRoutes(app, db, new SandboxTokenCodec(config.SESSION_SIGNING_KEYS));
   orderRoutes(app, { db, requireSandbox, onEventsCommitted });
   chaosRoutes(app, db, requireSandbox);
+  deadLetterRoutes(app, db, requireSandbox, onEventsCommitted);
   await webhookRoutes(app, { db, secrets: webhookSecrets, onEventsCommitted });
   if (simPayments !== undefined) simPaymentsRoutes(app, db, simPayments, onEventsCommitted);
   if (simCourier !== undefined) simCourierRoutes(app, db, simCourier, onEventsCommitted);

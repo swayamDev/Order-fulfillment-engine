@@ -170,6 +170,17 @@ export interface SimShipmentsTable {
   created_at: Timestamp;
 }
 
+export interface JobReplaysTable {
+  id: Generated<string>;
+  sandbox_id: string;
+  job_id: string;
+  queue: string;
+  previous_error: string | null;
+  previous_attempts: number;
+  requested_by: string;
+  replayed_at: Timestamp;
+}
+
 export interface SimPaymentIntentsTable {
   id: string;
   sandbox_id: string;
@@ -200,6 +211,7 @@ export interface Database {
   chaos_settings: ChaosSettingsTable;
   shipments: ShipmentsTable;
   sim_shipments: SimShipmentsTable;
+  job_replays: JobReplaysTable;
   sim_payment_intents: SimPaymentIntentsTable;
 }
 
