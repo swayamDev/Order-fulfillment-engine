@@ -147,6 +147,7 @@ export interface ChaosSettingsTable {
   payments_extra_delay_ms: ColumnType<number, number | undefined, number>;
   courier_down: ColumnType<boolean, boolean | undefined, boolean>;
   courier_fail_delivery: ColumnType<boolean, boolean | undefined, boolean>;
+  crash_next_step: ColumnType<boolean, boolean | undefined, boolean>;
   updated_at: Timestamp;
 }
 

@@ -5,6 +5,15 @@ const ConfigSchema = z.object({
   CONSOLE_ORIGIN: z.url().default('http://localhost:3000'),
   PORT: z.coerce.number().int().positive().default(4000),
   HOST: z.string().default('0.0.0.0'),
+  /**
+   * Worker processes the API process forks and supervises. 0 runs the
+   * workers inside the API process instead (simpler for local debugging).
+   */
+  WORKER_PROCESSES: z.coerce.number().int().min(0).max(8).default(2),
+  /** Workers (concurrent jobs) inside each worker process. */
+  WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(2),
+  /** How long a claimed job is leased before a crashed worker's job is reclaimed. */
+  WORKER_LEASE_SECONDS: z.coerce.number().int().min(1).max(600).default(15),
   /** This API's public base URL; simulated providers send webhooks here. */
   PUBLIC_API_URL: z.url().default('http://localhost:4000'),
   /** API key the payments module uses with the simulated payment provider. */

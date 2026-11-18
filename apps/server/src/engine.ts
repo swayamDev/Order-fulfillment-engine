@@ -115,12 +115,15 @@ export interface EngineOptions extends EngineDeps {
   >;
   /** Where loop failures are reported (the server passes its logger). */
   readonly onLoopError?: (error: unknown) => void;
+  /** Also called whenever the engine wakes its workers: wakes worker processes. */
+  readonly onWake?: () => void;
 }
 
 export function createEngine(db: Db, options: EngineOptions = {}): Engine {
   const handlers = buildHandlers(options);
   const wakeWorkers = () => {
     for (const worker of workers) worker.waker.notify();
+    options.onWake?.();
   };
   const wakeAll = () => {
     relay.waker.notify();

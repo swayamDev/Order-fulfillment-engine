@@ -39,6 +39,14 @@ export interface WorkerOptions {
    * events or new jobs, so the engine uses this to wake the relay and workers.
    */
   readonly onCommitted?: (job: Job) => void;
+  /** Runs before a claimed job starts, outside its transaction. */
+  readonly beforeJob?: (job: Job) => Promise<void>;
+  /**
+   * Runs after the handler, inside its transaction, just before the job's
+   * outcome is written and the transaction commits. The crash-a-worker chaos
+   * hook lives here, so a crash always lands mid-step.
+   */
+  readonly beforeCommit?: (job: Job) => Promise<void>;
   /** Called when claiming or reaping fails; the loop then waits and retries. */
   readonly onLoopError?: (error: unknown) => void;
   readonly backoff?: BackoffPolicy;
@@ -79,6 +87,8 @@ export class Worker {
   private readonly onError: (error: unknown, job: Job) => void;
   private readonly onLoopError: (error: unknown) => void;
   private readonly onCommitted: (job: Job) => void;
+  private readonly beforeJob: (job: Job) => Promise<void>;
+  private readonly beforeCommit: (job: Job) => Promise<void>;
   private readonly backoff: BackoffPolicy;
   private readonly random: () => number;
   private running: Promise<void> | undefined;
@@ -96,6 +106,8 @@ export class Worker {
     this.onError = options.onError ?? (() => undefined);
     this.onLoopError = options.onLoopError ?? (() => undefined);
     this.onCommitted = options.onCommitted ?? (() => undefined);
+    this.beforeJob = options.beforeJob ?? (() => Promise.resolve());
+    this.beforeCommit = options.beforeCommit ?? (() => Promise.resolve());
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
     this.random = options.random ?? Math.random;
   }
@@ -160,9 +172,11 @@ export class Worker {
     const handler = this.handlers.get(job.queue);
     try {
       if (handler === undefined) throw new Error(`No handler for queue ${job.queue}`);
+      await this.beforeJob(job);
       await withSandbox(this.db, job.sandbox_id, async (tx) => {
         await this.holdLease(tx, job);
         const outcome = await handler(tx, job);
+        await this.beforeCommit(job);
         await this.settle(tx, job, outcome ?? undefined);
       });
       this.onCommitted(job);

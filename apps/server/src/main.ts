@@ -1,73 +1,70 @@
+// The API process: HTTP API, simulated providers, outbox relay, and the
+// supervisor for the worker processes (or in-process workers when
+// WORKER_PROCESSES is 0).
+
 import { createDb } from '@sethu/db';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
 import { createEngine } from './engine.ts';
-import { httpPaymentsClient } from './modules/payments/index.ts';
-import { httpCourierClient } from './modules/shipping/index.ts';
-import type { SimCourierConfig } from './modules/sim-courier/index.ts';
-import type { SimPaymentsConfig } from './modules/sim-payments/index.ts';
+import { Supervisor, type WorkerExit } from './supervisor.ts';
+import { buildProviders } from './wiring.ts';
 
 const config = loadConfig();
 const db = createDb(config.DATABASE_URL);
+const providers = buildProviders(config);
 
-function first(secrets: readonly string[], name: string): string {
-  const [secret] = secrets;
-  if (secret === undefined) throw new Error(`${name} is empty`);
-  return secret;
-}
-
-// The simulated providers live in this process but are reached over HTTP,
-// exactly as real third parties would be.
-const simPayments: SimPaymentsConfig = {
-  apiKey: config.SIM_PAYMENTS_API_KEY,
-  signingSecret: first(config.SIM_PAYMENTS_WEBHOOK_SECRETS, 'SIM_PAYMENTS_WEBHOOK_SECRETS'),
-  webhookUrl: () => `${config.PUBLIC_API_URL}/v1/webhooks/sim-payments`,
-  delayMs: config.SIM_PAYMENTS_DELAY_MS,
-};
-const simCourier: SimCourierConfig = {
-  apiKey: config.SIM_COURIER_API_KEY,
-  signingSecret: first(config.SIM_COURIER_WEBHOOK_SECRETS, 'SIM_COURIER_WEBHOOK_SECRETS'),
-  webhookUrl: () => `${config.PUBLIC_API_URL}/v1/webhooks/sim-courier`,
-  delayMs: config.SIM_COURIER_DELAY_MS,
-};
-const payments = httpPaymentsClient({
-  baseUrl: () => `${config.PUBLIC_API_URL}/sim/payments`,
-  apiKey: config.SIM_PAYMENTS_API_KEY,
-});
-const courier = httpCourierClient({
-  baseUrl: () => `${config.PUBLIC_API_URL}/sim/courier`,
-  apiKey: config.SIM_COURIER_API_KEY,
-});
+const supervisor =
+  config.WORKER_PROCESSES > 0 ? new Supervisor({ processes: config.WORKER_PROCESSES }) : undefined;
 
 // Created before the engine so loop failures go to the same log.
-let logLoopError: (error: unknown) => void = (error) => {
-  console.error(error);
+let log: { error(obj: object, msg: string): void; warn(obj: object, msg: string): void } = {
+  error: (obj, msg) => {
+    console.error(msg, obj);
+  },
+  warn: (obj, msg) => {
+    console.warn(msg, obj);
+  },
 };
 const engine = createEngine(db, {
-  payments,
-  courier,
-  simPayments,
-  simCourier,
+  ...providers,
+  workerCount: supervisor === undefined ? config.WORKER_CONCURRENCY : 0,
+  worker: { leaseSeconds: config.WORKER_LEASE_SECONDS },
+  onWake: () => supervisor?.broadcast({ type: 'wake' }),
   onLoopError: (error) => {
-    logLoopError(error);
+    log.error({ err: error }, 'engine loop failed; retrying');
   },
 });
+
+supervisor?.on('message', (message: { type?: string }) => {
+  if (message.type === 'committed') engine.notify();
+});
+supervisor?.on('exit', (exit: WorkerExit) => {
+  if (stopping) return;
+  log.warn(
+    { slot: exit.slot, workerPid: exit.pid, code: exit.code, signal: exit.signal },
+    'worker process exited; restarting',
+  );
+});
+
 const app = await buildApp({
   config,
   db,
   logger: true,
-  simPayments,
-  simCourier,
-  webhookSecrets: new Map([
-    ['sim-payments', config.SIM_PAYMENTS_WEBHOOK_SECRETS],
-    ['sim-courier', config.SIM_COURIER_WEBHOOK_SECRETS],
-  ]),
+  simPayments: providers.simPayments,
+  simCourier: providers.simCourier,
+  webhookSecrets: providers.webhookSecrets,
   onEventsCommitted: () => {
     engine.notify();
   },
 });
+log = app.log;
 
+let stopping = false;
 const shutdown = async () => {
+  if (stopping) return;
+  stopping = true;
+  // Workers first, so none is restarted while the rest shuts down.
+  await supervisor?.stop();
   await app.close();
   await engine.stop();
   await db.destroy();
@@ -75,8 +72,6 @@ const shutdown = async () => {
 process.once('SIGINT', () => void shutdown());
 process.once('SIGTERM', () => void shutdown());
 
-logLoopError = (error) => {
-  app.log.error({ err: error }, 'engine loop failed; retrying');
-};
 engine.start();
+supervisor?.start();
 await app.listen({ port: config.PORT, host: config.HOST });
