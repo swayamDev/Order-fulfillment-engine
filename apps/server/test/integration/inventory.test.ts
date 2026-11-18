@@ -10,7 +10,7 @@ let engine: Engine;
 
 beforeAll(async () => {
   h = await startHarness();
-  engine = createEngine(h.db, 4);
+  engine = createEngine(h.db, { workerCount: 4 });
 });
 
 afterAll(async () => {

@@ -8,6 +8,7 @@ import { registerWriteGuards } from './http/guards.ts';
 import { problem } from './http/problem.ts';
 import { orderRoutes } from './modules/orders/index.ts';
 import { sandboxRoutes } from './modules/sandbox/index.ts';
+import { simPaymentsRoutes, type SimPaymentsConfig } from './modules/sim-payments/index.ts';
 import { webhookRoutes } from './modules/webhooks/index.ts';
 
 export interface AppDeps {
@@ -18,6 +19,8 @@ export interface AppDeps {
   readonly onEventsCommitted?: () => void;
   /** Accepted webhook secrets per provider. */
   readonly webhookSecrets?: ReadonlyMap<string, readonly string[]>;
+  /** Mounts the simulated payment provider's API when set. */
+  readonly simPayments?: SimPaymentsConfig;
 }
 
 export async function buildApp({
@@ -26,6 +29,7 @@ export async function buildApp({
   logger = false,
   onEventsCommitted = () => undefined,
   webhookSecrets = new Map(),
+  simPayments,
 }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger, bodyLimit: 64 * 1024 });
 
@@ -60,6 +64,7 @@ export async function buildApp({
   sandboxRoutes(app, db);
   orderRoutes(app, { db, onEventsCommitted });
   await webhookRoutes(app, { db, secrets: webhookSecrets, onEventsCommitted });
+  if (simPayments !== undefined) simPaymentsRoutes(app, db, simPayments);
 
   return app;
 }

@@ -14,6 +14,8 @@ export const WebhookEnvelope = z.object({
   type: z.string().min(1).max(100),
   created: z.number().int(),
   sandbox_id: z.uuid(),
+  /** Set by Sethu's simulated providers; real providers would not send it. */
+  simulated: z.literal(true).optional(),
   data: z.record(z.string(), z.unknown()),
 });
 export type WebhookEnvelope = z.infer<typeof WebhookEnvelope>;
