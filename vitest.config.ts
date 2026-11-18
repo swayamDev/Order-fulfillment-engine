@@ -15,6 +15,7 @@ export default defineConfig({
           name: 'integration',
           include: ['packages/*/test/**/*.int.test.ts', 'apps/*/test/integration/**/*.test.ts'],
           exclude: ['**/node_modules/**'],
+          globalSetup: ['packages/db/test/global-setup.ts'],
           fileParallelism: false,
           testTimeout: 30_000,
           hookTimeout: 30_000,

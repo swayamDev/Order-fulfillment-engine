@@ -15,7 +15,8 @@
     "test:integration": "vitest run --project integration --passWithNoTests",
     "check:repo": "node scripts/check-repo.ts",
     "db:up": "docker compose up -d --wait postgres",
-    "db:roles": "node --env-file-if-exists=.env packages/db/src/roles.ts"
+    "db:roles": "node --env-file-if-exists=.env packages/db/src/roles.ts",
+    "db:migrate": "node --env-file-if-exists=.env packages/db/src/migrate.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -211,6 +211,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@sethu/domain':
+        specifier: workspace:*
+        version: link:../domain
       kysely:
         specifier: ^0.29.9
         version: 0.29.9
@@ -227,6 +230,9 @@ importers:
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
+      vitest:
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2))
 
   packages/domain:
     devDependencies:
