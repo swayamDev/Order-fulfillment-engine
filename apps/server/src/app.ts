@@ -6,15 +6,23 @@ import { ZodError } from 'zod';
 import type { Config } from './config.ts';
 import { registerWriteGuards } from './http/guards.ts';
 import { problem } from './http/problem.ts';
+import { orderRoutes } from './modules/orders/index.ts';
 import { sandboxRoutes } from './modules/sandbox/index.ts';
 
 export interface AppDeps {
   readonly config: Pick<Config, 'CONSOLE_ORIGIN'>;
   readonly db: Db;
   readonly logger?: boolean;
+  /** Called after a request commits outbox events, to wake the relay. */
+  readonly onEventsCommitted?: () => void;
 }
 
-export async function buildApp({ config, db, logger = false }: AppDeps): Promise<FastifyInstance> {
+export async function buildApp({
+  config,
+  db,
+  logger = false,
+  onEventsCommitted = () => undefined,
+}: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger, bodyLimit: 64 * 1024 });
 
   await app.register(cookie);
@@ -46,6 +54,7 @@ export async function buildApp({ config, db, logger = false }: AppDeps): Promise
 
   app.get('/v1/health', () => ({ ok: true }));
   sandboxRoutes(app, db);
+  orderRoutes(app, { db, onEventsCommitted });
 
   return app;
 }

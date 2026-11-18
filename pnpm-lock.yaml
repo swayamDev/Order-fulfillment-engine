@@ -229,6 +229,10 @@ importers:
         version: 5.1.0(@types/node@24.19.2)(vite@8.3.8(@types/node@24.19.2))
 
   packages/contracts:
+    dependencies:
+      zod:
+        specifier: ^4.6.7
+        version: 4.6.7
     devDependencies:
       '@types/node':
         specifier: ^24.19.2
