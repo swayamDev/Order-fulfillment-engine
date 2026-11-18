@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { problem } from '../../http/problem.ts';
 import type { SandboxGuard } from '../sandbox/index.ts';
+import { cancelOrder } from './cancel.ts';
 import { getOrder, IdempotencyConflictError, placeOrder, UnknownSkuError } from './service.ts';
 
 const OrderParams = z.object({ id: z.uuid() });
@@ -58,5 +59,43 @@ export function orderRoutes(
     if (order === undefined)
       return problem(reply, 404, 'not_found', 'No such order in this sandbox.');
     return order;
+  });
+
+  app.post('/v1/orders/:id/cancel', guard, async (request, reply) => {
+    const params = OrderParams.safeParse(request.params);
+    if (!params.success) return problem(reply, 404, 'not_found', 'No such order in this sandbox.');
+    const ifMatch = request.headers['if-match'];
+    const version = typeof ifMatch === 'string' ? Number(ifMatch.replaceAll('"', '')) : NaN;
+    if (!Number.isInteger(version) || version < 1) {
+      return problem(
+        reply,
+        428,
+        'version_required',
+        'Send If-Match with the order version you are acting on.',
+      );
+    }
+    const result = await cancelOrder(db, request.sandboxId, params.data.id, version);
+    switch (result.kind) {
+      case 'not_found':
+        return problem(reply, 404, 'not_found', 'No such order in this sandbox.');
+      case 'stale':
+        return problem(reply, 409, 'stale_version', 'The order changed since you loaded it.', {
+          currentVersion: result.currentVersion,
+        });
+      case 'not_allowed':
+        return problem(
+          reply,
+          409,
+          'invalid_transition',
+          `An order that is ${result.state} cannot be cancelled.`,
+          { state: result.state },
+        );
+      case 'cancelled':
+        onEventsCommitted();
+        return reply
+          .code(200)
+          .header('etag', `"${String(result.version)}"`)
+          .send({ version: result.version });
+    }
   });
 }

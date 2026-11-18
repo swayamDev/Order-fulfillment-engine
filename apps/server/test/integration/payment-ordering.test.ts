@@ -20,6 +20,7 @@ let owner: Db;
 /** Gives every order a predictable intent and sends no webhooks: the tests do. */
 const stubPayments: PaymentsClient = {
   createIntent: (input) => Promise.resolve({ id: `pi_test_${input.orderId}` }),
+  refund: () => Promise.resolve(),
 };
 
 beforeAll(async () => {

@@ -139,6 +139,7 @@ describe('payment flow, placed to paid', () => {
         if (calls === 1) throw new Error('worker crashed after the provider call');
         return intent;
       },
+      refund: (input) => payments.refund(input),
     };
     await drain(
       createEngine(db, {

@@ -9,7 +9,7 @@ type Json<T = unknown> = ColumnType<T, T, T>;
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'dead';
 export type ReservationStatus = 'held' | 'released' | 'consumed';
-export type SimPaymentStatus = 'authorized' | 'captured' | 'failed';
+export type SimPaymentStatus = 'authorized' | 'captured' | 'failed' | 'refunded';
 export type PaymentStatus = 'pending' | 'authorized' | 'captured' | 'failed' | 'refunded';
 
 export interface SandboxesTable {
@@ -155,6 +155,8 @@ export interface SimPaymentIntentsTable {
   amount_minor: number;
   currency: string;
   status: SimPaymentStatus;
+  next_sequence: ColumnType<number, number | undefined, number>;
+  refunded_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
   created_at: Timestamp;
   updated_at: Timestamp;
 }

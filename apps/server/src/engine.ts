@@ -2,10 +2,18 @@
 // handler runs each queue. The only place that knows the whole flow.
 
 import type { Db } from '@sethu/db';
+import {
+  COMPENSATE_CANCELLED,
+  COMPENSATE_PAYMENT_FAILED,
+  compensateCancelled,
+  compensatePaymentFailed,
+} from './modules/compensation/index.ts';
 import { RESERVE_INVENTORY, reserveInventory } from './modules/inventory/index.ts';
 import { OutboxRelay, type Subscriptions } from './modules/outbox/index.ts';
 import {
   applyPaymentWebhook,
+  REFUND_PAYMENT,
+  refundPayment,
   REQUEST_PAYMENT,
   requestPayment,
   type PaymentsClient,
@@ -22,6 +30,8 @@ import { PROCESS_WEBHOOK, processWebhook } from './modules/webhooks/index.ts';
 export const SUBSCRIPTIONS: Subscriptions = new Map([
   ['order.placed', [RESERVE_INVENTORY]],
   ['order.inventory_reserved', [REQUEST_PAYMENT]],
+  ['order.payment_failed', [COMPENSATE_PAYMENT_FAILED]],
+  ['order.cancelled', [COMPENSATE_CANCELLED]],
 ]);
 
 export interface EngineDeps {
@@ -34,9 +44,14 @@ export interface EngineDeps {
 export function buildHandlers(deps: EngineDeps = {}): Map<string, JobHandler> {
   const handlers = new Map<string, JobHandler>([
     [RESERVE_INVENTORY, reserveInventory],
+    [COMPENSATE_PAYMENT_FAILED, compensatePaymentFailed],
+    [COMPENSATE_CANCELLED, compensateCancelled],
     [PROCESS_WEBHOOK, processWebhook(new Map([[SIM_PAYMENTS, applyPaymentWebhook]]))],
   ]);
-  if (deps.payments !== undefined) handlers.set(REQUEST_PAYMENT, requestPayment(deps.payments));
+  if (deps.payments !== undefined) {
+    handlers.set(REQUEST_PAYMENT, requestPayment(deps.payments));
+    handlers.set(REFUND_PAYMENT, refundPayment(deps.payments));
+  }
   if (deps.simPayments !== undefined) {
     handlers.set(DELIVER_SIM_PAYMENT_WEBHOOK, deliverSimPaymentWebhook(deps.simPayments));
   }

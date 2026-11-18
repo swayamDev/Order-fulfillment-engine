@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { appendOrderEvent, lockOrder, transitionOrder } from '../orders/index.ts';
 import { deadLetter, PermanentJobError, retryLater, type JobOutcome } from '../queue/index.ts';
 import type { InboxEventView } from '../webhooks/index.ts';
+import { requestRefund } from './refund.ts';
 
 /** The longest an event may wait for an earlier one before it is dead-lettered. */
 export const MAX_HOLD_MS = 10 * 60_000;
@@ -98,6 +99,15 @@ export async function applyPaymentWebhook(
       ...(outcome.to === 'paid' ? { paymentCaptured: true } : {}),
     });
   }
+  if (outcome.kind === 'refund') {
+    // The money was taken after the order was cancelled: record it and give it back.
+    await tx
+      .updateTable('orders')
+      .set({ payment_captured: true, updated_at: sql<Date>`now()` })
+      .where('id', '=', order.id)
+      .execute();
+    await requestRefund(tx, order, 'payment captured after the order was cancelled');
+  }
   await releaseNext(tx, data.intent_id, data.sequence + 1);
   return undefined;
 }
@@ -155,7 +165,12 @@ async function releaseNext(tx: Tx, intentId: string, sequence: number): Promise<
 }
 
 type Outcome =
-  | { kind: 'apply'; to: 'paid' | 'payment_failed'; paymentStatus: 'captured' | 'failed' }
+  | {
+      kind: 'apply';
+      to: 'paid' | 'payment_failed' | 'refunded';
+      paymentStatus: 'captured' | 'failed' | 'refunded';
+    }
+  | { kind: 'refund'; paymentStatus: 'captured' }
   | { kind: 'noted'; paymentStatus?: 'authorized' }
   | { kind: 'ignored'; reason: string; paymentStatus?: 'captured' | 'failed' };
 
@@ -166,13 +181,14 @@ function decide(state: string, type: string): Outcome {
         ? { kind: 'noted', paymentStatus: 'authorized' }
         : { kind: 'ignored', reason: `order is already ${state}` };
     case 'payment.captured':
-      return state === 'payment_pending'
-        ? { kind: 'apply', to: 'paid', paymentStatus: 'captured' }
-        : {
-            kind: 'ignored',
-            reason: `order is ${state}, not payment_pending`,
-            paymentStatus: 'captured',
-          };
+      if (state === 'payment_pending')
+        return { kind: 'apply', to: 'paid', paymentStatus: 'captured' };
+      if (state === 'cancelled') return { kind: 'refund', paymentStatus: 'captured' };
+      return {
+        kind: 'ignored',
+        reason: `order is ${state}, not payment_pending`,
+        paymentStatus: 'captured',
+      };
     case 'payment.failed':
       return state === 'payment_pending'
         ? { kind: 'apply', to: 'payment_failed', paymentStatus: 'failed' }
@@ -180,6 +196,13 @@ function decide(state: string, type: string): Outcome {
             kind: 'ignored',
             reason: `order is ${state}, not payment_pending`,
             paymentStatus: 'failed',
+          };
+    case 'payment.refunded':
+      return state === 'cancelled' || state === 'shipment_failed'
+        ? { kind: 'apply', to: 'refunded', paymentStatus: 'refunded' }
+        : {
+            kind: 'ignored',
+            reason: `order is ${state}; a refund only completes a cancelled or failed shipment`,
           };
     default:
       return { kind: 'ignored', reason: `unknown event type ${type}` };

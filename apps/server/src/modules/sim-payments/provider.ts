@@ -6,6 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { withSandbox, type Db, type Job, type Tx } from '@sethu/db';
 import type { FastifyInstance } from 'fastify';
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { problem } from '../../http/problem.ts';
 import { readChaos } from '../chaos/index.ts';
@@ -87,7 +88,12 @@ export function simPaymentsRoutes(
         .returningAll()
         .executeTakeFirst();
       if (created !== undefined) {
-        await scheduleOutcome(tx, config, created);
+        const outcome = await scheduleOutcome(tx, config, created);
+        await tx
+          .updateTable('sim_payment_intents')
+          .set({ status: outcome.status, next_sequence: outcome.nextSequence })
+          .where('id', '=', created.id)
+          .execute();
         return { intent: created, replayed: false };
       }
       const existing = await tx
@@ -109,6 +115,111 @@ export function simPaymentsRoutes(
     };
     return reply.code(result.replayed ? 200 : 201).send(response);
   });
+
+  // Refund a captured payment. Idempotent: refunding again answers with the
+  // same refund. The refund webhook takes the payment's next sequence number.
+  app.post('/sim/payments/v1/intents/:id/refunds', async (request, reply) => {
+    reply.header('x-sethu-simulated', 'true');
+    if (request.headers.authorization !== `Bearer ${config.apiKey}`) {
+      return problem(reply, 401, 'unauthorized', 'Simulated provider: bad API key.');
+    }
+    const { id } = request.params as { id: string };
+    const body = RefundIntent.parse(request.body);
+
+    const result = await withSandbox(db, body.sandbox_id, async (tx) => {
+      const intent = await tx
+        .selectFrom('sim_payment_intents')
+        .selectAll()
+        .where('id', '=', id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (intent === undefined) return { kind: 'not_found' as const };
+      if (intent.status === 'refunded') return { kind: 'replayed' as const };
+      if (intent.status !== 'captured')
+        return { kind: 'not_captured' as const, status: intent.status };
+
+      const chaos = await readChaos(tx);
+      await enqueueDelivery(
+        tx,
+        intent.sandbox_id,
+        buildEvent(intent, 'payment.refunded', intent.next_sequence),
+        config.delayMs + chaos.paymentsExtraDelayMs,
+        0,
+      );
+      await tx
+        .updateTable('sim_payment_intents')
+        .set({
+          status: 'refunded',
+          refunded_at: sql<Date>`now()`,
+          next_sequence: intent.next_sequence + 1,
+          updated_at: sql<Date>`now()`,
+        })
+        .where('id', '=', id)
+        .execute();
+      return { kind: 'created' as const };
+    });
+
+    switch (result.kind) {
+      case 'not_found':
+        return problem(reply, 404, 'not_found', 'Simulated provider: no such payment.');
+      case 'not_captured':
+        return problem(
+          reply,
+          409,
+          'not_captured',
+          `Simulated provider: payment is ${result.status}.`,
+        );
+      case 'replayed':
+        return reply.code(200).send({ intent_id: id, status: 'refunded', simulated: true });
+      case 'created':
+        onJobsQueued();
+        return reply.code(201).send({ intent_id: id, status: 'refunded', simulated: true });
+    }
+  });
+}
+
+const RefundIntent = z.object({ sandbox_id: z.uuid() });
+
+interface IntentFacts {
+  id: string;
+  sandbox_id: string;
+  order_id: string;
+  amount_minor: number;
+  currency: string;
+}
+
+function buildEvent(intent: IntentFacts, type: string, sequence: number) {
+  return {
+    id: `evt_sim_${randomUUID().replaceAll('-', '').slice(0, 20)}`,
+    type,
+    created: Math.floor(Date.now() / 1000),
+    sandbox_id: intent.sandbox_id,
+    simulated: true as const,
+    data: {
+      intent_id: intent.id,
+      order_id: intent.order_id,
+      amount_minor: intent.amount_minor,
+      currency: intent.currency,
+      sequence,
+    },
+  };
+}
+
+async function enqueueDelivery(
+  tx: Tx,
+  sandboxId: string,
+  envelope: ReturnType<typeof buildEvent>,
+  delayMs: number,
+  copy: number,
+): Promise<void> {
+  await enqueue(tx, {
+    sandboxId,
+    queue: DELIVER_SIM_PAYMENT_WEBHOOK,
+    payload: { envelope },
+    dedupeKey: `sim-deliver:${envelope.id}:${copy}`,
+    delayMs,
+    maxAttempts: 8,
+  });
 }
 
 /**
@@ -120,32 +231,13 @@ export function simPaymentsRoutes(
 async function scheduleOutcome(
   tx: Tx,
   config: SimPaymentsConfig,
-  intent: {
-    id: string;
-    sandbox_id: string;
-    order_id: string;
-    amount_minor: number;
-    currency: string;
-  },
-): Promise<void> {
+  intent: IntentFacts,
+): Promise<{ status: 'captured' | 'failed'; nextSequence: number }> {
   const chaos = await readChaos(tx);
   const types = chaos.paymentsDecline
     ? ['payment.failed']
     : ['payment.authorized', 'payment.captured'];
-  const events = types.map((type, i) => ({
-    id: `evt_sim_${randomUUID().replaceAll('-', '').slice(0, 20)}`,
-    type,
-    created: Math.floor(Date.now() / 1000),
-    sandbox_id: intent.sandbox_id,
-    simulated: true as const,
-    data: {
-      intent_id: intent.id,
-      order_id: intent.order_id,
-      amount_minor: intent.amount_minor,
-      currency: intent.currency,
-      sequence: i + 1,
-    },
-  }));
+  const events = types.map((type, i) => buildEvent(intent, type, i + 1));
 
   const delivered = chaos.paymentsDropFirst ? events.slice(1) : events;
   const ordered = chaos.paymentsReverseOrder ? [...delivered].reverse() : delivered;
@@ -154,17 +246,20 @@ async function scheduleOutcome(
 
   for (const [slot, envelope] of ordered.entries()) {
     for (let copy = 0; copy < copies; copy++) {
-      await enqueue(tx, {
-        sandboxId: intent.sandbox_id,
-        queue: DELIVER_SIM_PAYMENT_WEBHOOK,
-        payload: { envelope },
-        dedupeKey: `sim-deliver:${envelope.id}:${copy}`,
-        // Slots at least 2 ms apart so deliveries are claimed in the intended order.
-        delayMs: gap * (slot + 1) + slot * 2 + copy,
-        maxAttempts: 8,
-      });
+      // Slots at least 2 ms apart so deliveries are claimed in the intended order.
+      await enqueueDelivery(
+        tx,
+        intent.sandbox_id,
+        envelope,
+        gap * (slot + 1) + slot * 2 + copy,
+        copy,
+      );
     }
   }
+  return {
+    status: chaos.paymentsDecline ? 'failed' : 'captured',
+    nextSequence: events.length + 1,
+  };
 }
 
 /** Job handler: POST one signed webhook. A non-2xx answer throws, so the queue retries with backoff. */
