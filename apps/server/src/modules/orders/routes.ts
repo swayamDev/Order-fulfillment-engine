@@ -3,19 +3,23 @@ import type { Db } from '@sethu/db';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { problem } from '../../http/problem.ts';
-import { requireSandbox } from '../sandbox/index.ts';
+import type { SandboxGuard } from '../sandbox/index.ts';
 import { getOrder, IdempotencyConflictError, placeOrder, UnknownSkuError } from './service.ts';
 
 const OrderParams = z.object({ id: z.uuid() });
 
 export interface OrderRouteDeps {
   readonly db: Db;
+  readonly requireSandbox: SandboxGuard;
   /** Called after an order commits, so the outbox relay can wake. */
   readonly onEventsCommitted: () => void;
 }
 
-export function orderRoutes(app: FastifyInstance, { db, onEventsCommitted }: OrderRouteDeps): void {
-  const guard = { preHandler: requireSandbox(db) };
+export function orderRoutes(
+  app: FastifyInstance,
+  { db, requireSandbox, onEventsCommitted }: OrderRouteDeps,
+): void {
+  const guard = { preHandler: requireSandbox };
 
   app.post('/v1/orders', guard, async (request, reply) => {
     const key = IdempotencyKey.safeParse(request.headers['idempotency-key']);

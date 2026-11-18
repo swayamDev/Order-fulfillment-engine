@@ -1,13 +1,14 @@
 import { withSandbox } from '@sethu/db';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { SANDBOX_COOKIE } from '../../src/modules/sandbox/index.ts';
+import { SANDBOX_COOKIE, SandboxTokenCodec } from '../../src/modules/sandbox/index.ts';
 import {
   CONSOLE_ORIGIN,
   consoleJson,
   newSandbox,
   sandboxCookie,
   startHarness,
+  TEST_SESSION_KEY,
   type Harness,
 } from './harness.ts';
 
@@ -82,27 +83,78 @@ describe('sandbox session', () => {
     expect(response.json<{ sandboxId: string }>().sandboxId).toBe(id);
   });
 
-  it('rejects a missing, malformed or forged cookie', async () => {
-    const { cookie: a } = await newSandbox(h.app);
-    const { cookie: b } = await newSandbox(h.app);
-    const [aId] = a.split('=')[1]?.split('.') ?? [];
-    const bSecret = b.split('.')[1] ?? '';
+  it('refuses edited and forged cookies and never resolves them to another sandbox', async () => {
+    const a = await newSandbox(h.app);
+    const b = await newSandbox(h.app);
+    const value = (cookie: string) => cookie.slice(SANDBOX_COOKIE.length + 1);
+    const [aId = '', aSecret = '', aMac = ''] = value(a.cookie).split('.');
+    const [bId = '', bSecret = '', bMac = ''] = value(b.cookie).split('.');
+    const flip = (s: string) => (s.startsWith('A') ? `B${s.slice(1)}` : `A${s.slice(1)}`);
+    const serverKey = new SandboxTokenCodec([TEST_SESSION_KEY]);
+    const attackerKey = new SandboxTokenCodec(['attacker-key-00000000000000000000000000']);
 
-    for (const header of [
-      undefined,
-      `${SANDBOX_COOKIE}=nonsense`,
-      `${SANDBOX_COOKIE}=${aId ?? ''}.${'x'.repeat(43)}`,
-      // A real secret presented with somebody else's sandbox id.
-      `${SANDBOX_COOKIE}=${aId ?? ''}.${bSecret}`,
-    ]) {
+    const forgeries = {
+      'no cookie': undefined,
+      nonsense: 'nonsense',
+      "A's secret and mac with B's id": `${bId}.${aSecret}.${aMac}`,
+      "B's secret with A's id and mac": `${aId}.${bSecret}.${aMac}`,
+      "B's mac on A's id and secret": `${aId}.${aSecret}.${bMac}`,
+      'flipped mac': `${aId}.${aSecret}.${flip(aMac)}`,
+      'flipped secret': `${aId}.${flip(aSecret)}.${aMac}`,
+      'old unsigned format with a real secret': `${aId}.${aSecret}`,
+      // A leaked signing key alone is not enough: the secret must still match.
+      "server-signed, B's id, invented secret": serverKey.sign({
+        sandboxId: bId,
+        secret: 'x'.repeat(43),
+      }),
+      // A stolen secret alone is not enough: the mac must be the server's.
+      "B's real id and secret, attacker's key": attackerKey.sign({
+        sandboxId: bId,
+        secret: bSecret,
+      }),
+    };
+
+    for (const [label, forged] of Object.entries(forgeries)) {
       const response = await h.app.inject({
         method: 'GET',
         url: '/v1/sandboxes/current',
-        headers: header === undefined ? {} : { cookie: header },
+        headers: forged === undefined ? {} : { cookie: `${SANDBOX_COOKIE}=${forged}` },
       });
-      expect(response.statusCode, header).toBe(401);
-      expect(response.json<{ type: string }>().type).toBe('no_sandbox');
+      expect(response.statusCode, label).toBe(401);
+      expect(response.json<{ type: string }>().type, label).toBe('no_sandbox');
+      expect(response.body, label).not.toContain(b.id);
     }
+
+    // And the genuine cookies still work, each for its own sandbox.
+    for (const own of [a, b]) {
+      const response = await h.app.inject({
+        method: 'GET',
+        url: '/v1/sandboxes/current',
+        headers: { cookie: own.cookie },
+      });
+      expect(response.json<{ sandboxId: string }>().sandboxId).toBe(own.id);
+    }
+  });
+
+  it('checks the signature on sandbox-scoped routes too, not just the session route', async () => {
+    const a = await newSandbox(h.app);
+    const b = await newSandbox(h.app);
+    const [, aSecret = '', aMac = ''] = a.cookie.slice(SANDBOX_COOKIE.length + 1).split('.');
+    const response = await h.app.inject({
+      method: 'POST',
+      url: '/v1/orders',
+      headers: {
+        ...consoleJson,
+        'idempotency-key': 'forged-order-0001',
+        cookie: `${SANDBOX_COOKIE}=${b.id}.${aSecret}.${aMac}`,
+      },
+      payload: { items: [{ sku: 'TEA-ASSAM-250', quantity: 1 }] },
+    });
+    expect(response.statusCode).toBe(401);
+    const ordersInB = await withSandbox(h.owner, b.id, (tx) =>
+      tx.selectFrom('orders').select('id').execute(),
+    );
+    expect(ordersInB).toEqual([]);
   });
 
   it('rejects an expired sandbox', async () => {

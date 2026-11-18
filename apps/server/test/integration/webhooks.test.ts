@@ -6,7 +6,7 @@ import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../src/app.ts';
 import { signatureHeader } from '../../src/modules/webhooks/index.ts';
-import { CONSOLE_ORIGIN, newSandbox } from './harness.ts';
+import { newSandbox, TEST_CONFIG } from './harness.ts';
 
 const SECRET = 'test-sim-payments-secret-000000000000';
 const ROTATED = 'test-sim-payments-secret-111111111111';
@@ -20,7 +20,7 @@ beforeAll(async () => {
   db = appDb();
   owner = ownerDb();
   app = await buildApp({
-    config: { CONSOLE_ORIGIN },
+    config: TEST_CONFIG,
     db,
     webhookSecrets: new Map([['sim-payments', [SECRET, ROTATED]]]),
     onEventsCommitted: () => {

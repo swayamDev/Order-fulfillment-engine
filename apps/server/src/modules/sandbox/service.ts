@@ -1,7 +1,7 @@
 import { withSandbox, type Db } from '@sethu/db';
 import { sql } from 'kysely';
 import { seedDemoCatalog } from '../catalog/index.ts';
-import { formatToken, hashSecret, newSandboxToken, type SandboxToken } from './token.ts';
+import { hashSecret, type SandboxToken, type SandboxTokenCodec } from './token.ts';
 
 export const SANDBOX_IDLE_TTL = '2 hours';
 export const SANDBOX_HARD_TTL = '6 hours';
@@ -13,8 +13,11 @@ export interface SandboxSession {
   readonly hardExpiresAt: Date;
 }
 
-export async function createSandbox(db: Db): Promise<{ token: string; session: SandboxSession }> {
-  const token = newSandboxToken();
+export async function createSandbox(
+  db: Db,
+  codec: SandboxTokenCodec,
+): Promise<{ token: string; session: SandboxSession }> {
+  const { token, value } = codec.issue();
   const row = await withSandbox(db, token.sandboxId, async (tx) => {
     const created = await tx
       .insertInto('sandboxes')
@@ -30,7 +33,7 @@ export async function createSandbox(db: Db): Promise<{ token: string; session: S
     return created;
   });
   return {
-    token: formatToken(token),
+    token: value,
     session: { sandboxId: row.id, expiresAt: row.expires_at, hardExpiresAt: row.hard_expires_at },
   };
 }

@@ -5,6 +5,8 @@ import { buildApp } from '../../src/app.ts';
 import { SANDBOX_COOKIE } from '../../src/modules/sandbox/index.ts';
 
 export const CONSOLE_ORIGIN = 'https://sethu.test';
+export const TEST_SESSION_KEY = 'test-session-signing-key-0000000000000';
+export const TEST_CONFIG = { CONSOLE_ORIGIN, SESSION_SIGNING_KEYS: [TEST_SESSION_KEY] };
 
 export interface Harness {
   app: FastifyInstance;
@@ -16,7 +18,7 @@ export interface Harness {
 export async function startHarness(): Promise<Harness> {
   const db = appDb();
   const owner = ownerDb();
-  const app = await buildApp({ config: { CONSOLE_ORIGIN }, db });
+  const app = await buildApp({ config: TEST_CONFIG, db });
   return {
     app,
     db,

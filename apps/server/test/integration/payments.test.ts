@@ -8,7 +8,7 @@ import { createEngine, drain } from '../../src/engine.ts';
 import { httpPaymentsClient, type PaymentsClient } from '../../src/modules/payments/index.ts';
 import type { SimPaymentsConfig } from '../../src/modules/sim-payments/index.ts';
 import { signatureHeader } from '../../src/modules/webhooks/index.ts';
-import { CONSOLE_ORIGIN, consoleJson, newSandbox } from './harness.ts';
+import { consoleJson, newSandbox, TEST_CONFIG } from './harness.ts';
 
 const SECRET = 'test-sim-payments-secret-000000000000';
 const API_KEY = 'sk_sim_test_000000000000';
@@ -30,7 +30,7 @@ beforeAll(async () => {
   db = appDb(16);
   owner = ownerDb();
   app = await buildApp({
-    config: { CONSOLE_ORIGIN },
+    config: TEST_CONFIG,
     db,
     simPayments: sim,
     webhookSecrets: new Map([['sim-payments', [SECRET]]]),

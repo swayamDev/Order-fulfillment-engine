@@ -40,9 +40,14 @@ Nobody can log in as it, and the app can only call those functions. Job handlers
 
 ## Sessions without a cross-sandbox lookup
 
-The sandbox cookie is `<sandbox id>.<secret>`. The API sets `app.sandbox_id` from the id, then matches the SHA-256 of the secret under RLS. A forged id can only ever match rows in the sandbox it names, and only with that sandbox's secret, so resolving a session needs no definer function at all.
+The sandbox cookie is `<sandbox id>.<secret>.<mac>`:
 
-The cookie is `__Host-sethu_sandbox`: httpOnly, Secure, SameSite=Lax, host-only on the API domain. Because every `*.swayam.space` host counts as the same site, writes also require the exact console `Origin` and a JSON body.
+- the **mac** is HMAC-SHA256 under a server key (`SESSION_SIGNING_KEYS`; the first signs, all verify, so keys rotate) over the id and secret. It is checked in constant time on every request, before any database work;
+- the API then sets `app.sandbox_id` from the id and matches the SHA-256 of the **secret** under RLS.
+
+Each check alone refuses a forged cookie. Editing the id breaks the mac. A leaked signing key still needs the sandbox's secret. A stolen secret still needs the server's mac. Resolving a session needs no definer function at all.
+
+The cookie is `__Host-sethu_sandbox`: httpOnly, Secure, SameSite=Lax, host-only on the API domain. Because every `*.swayam.space` host counts as the same site, writes also require the exact console `Origin` and a JSON body. In production the server refuses to start unless the signing keys and other secrets are set explicitly.
 
 ## Proof
 

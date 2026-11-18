@@ -7,12 +7,12 @@ import type { Config } from './config.ts';
 import { registerWriteGuards } from './http/guards.ts';
 import { problem } from './http/problem.ts';
 import { orderRoutes } from './modules/orders/index.ts';
-import { sandboxRoutes } from './modules/sandbox/index.ts';
+import { sandboxRoutes, SandboxTokenCodec } from './modules/sandbox/index.ts';
 import { simPaymentsRoutes, type SimPaymentsConfig } from './modules/sim-payments/index.ts';
 import { webhookRoutes } from './modules/webhooks/index.ts';
 
 export interface AppDeps {
-  readonly config: Pick<Config, 'CONSOLE_ORIGIN'>;
+  readonly config: Pick<Config, 'CONSOLE_ORIGIN' | 'SESSION_SIGNING_KEYS'>;
   readonly db: Db;
   readonly logger?: boolean;
   /** Called after a request commits outbox events, to wake the relay. */
@@ -61,8 +61,8 @@ export async function buildApp({
   });
 
   app.get('/v1/health', () => ({ ok: true }));
-  sandboxRoutes(app, db);
-  orderRoutes(app, { db, onEventsCommitted });
+  const requireSandbox = sandboxRoutes(app, db, new SandboxTokenCodec(config.SESSION_SIGNING_KEYS));
+  orderRoutes(app, { db, requireSandbox, onEventsCommitted });
   await webhookRoutes(app, { db, secrets: webhookSecrets, onEventsCommitted });
   if (simPayments !== undefined) simPaymentsRoutes(app, db, simPayments, onEventsCommitted);
 

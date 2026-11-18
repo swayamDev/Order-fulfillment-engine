@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../src/app.ts';
 import { createEngine, drain } from '../../src/engine.ts';
 import type { IntentResponse, SimPaymentsConfig } from '../../src/modules/sim-payments/index.ts';
-import { CONSOLE_ORIGIN, newSandbox } from './harness.ts';
+import { newSandbox, TEST_CONFIG } from './harness.ts';
 
 const SECRET = 'test-sim-payments-secret-000000000000';
 const API_KEY = 'sk_sim_test_000000000000';
@@ -27,7 +27,7 @@ beforeAll(async () => {
   db = appDb();
   owner = ownerDb();
   app = await buildApp({
-    config: { CONSOLE_ORIGIN },
+    config: TEST_CONFIG,
     db,
     simPayments: sim,
     webhookSecrets: new Map([['sim-payments', [SECRET]]]),

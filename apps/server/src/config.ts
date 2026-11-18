@@ -12,6 +12,15 @@ const ConfigSchema = z.object({
   /** Gap between the simulated provider's webhooks for one payment. */
   SIM_PAYMENTS_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(1_500),
   /**
+   * Keys that sign sandbox session cookies, comma separated. The first signs;
+   * all verify, so a key can be rotated without logging everyone out.
+   */
+  SESSION_SIGNING_KEYS: z
+    .string()
+    .default('dev-only-session-signing-key-000000000')
+    .transform((value) => value.split(',').map((s) => s.trim()))
+    .pipe(z.array(z.string().min(32)).min(1)),
+  /**
    * Secrets the simulated payment provider signs webhooks with, comma separated.
    * The first signs; all are accepted, which is how a secret is rotated.
    */
@@ -24,6 +33,21 @@ const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+/** Secrets that have development defaults and must never use them in production. */
+const PRODUCTION_SECRETS = [
+  'SESSION_SIGNING_KEYS',
+  'SIM_PAYMENTS_WEBHOOK_SECRETS',
+  'SIM_PAYMENTS_API_KEY',
+] as const;
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  if (env['NODE_ENV'] === 'production') {
+    const missing = PRODUCTION_SECRETS.filter((name) => (env[name] ?? '') === '');
+    if (missing.length > 0) {
+      throw new Error(
+        `Set these in production; the development defaults are public: ${missing.join(', ')}`,
+      );
+    }
+  }
   return ConfigSchema.parse(env);
 }
