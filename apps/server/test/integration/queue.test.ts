@@ -2,7 +2,12 @@ import { withSandbox, type Db, type Job } from '@sethu/db';
 import { appDb, createTestSandbox, ownerDb, seedProduct } from '@sethu/db/testing';
 import { sql } from 'kysely';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { enqueue, Worker, type JobHandler } from '../../src/modules/queue/index.ts';
+import {
+  enqueue,
+  PermanentJobError,
+  Worker,
+  type JobHandler,
+} from '../../src/modules/queue/index.ts';
 
 let db: Db;
 let owner: Db;
@@ -208,6 +213,70 @@ describe('job queue', () => {
     const [job] = await jobsIn(sandbox, 'flaky');
     expect(job).toMatchObject({ status: 'queued', attempts: 1, last_error: 'courier timed out' });
     expect(errors).toHaveLength(1);
+  });
+
+  it('waits a jittered, exponentially growing delay between attempts', async () => {
+    const sandbox = await createTestSandbox(owner);
+    await addJobs(sandbox, 'slow-retry', 1);
+    const worker = new Worker({
+      db,
+      id: 'slow-retry',
+      handlers: handlers({ 'slow-retry': () => Promise.reject(new Error('503 from courier')) }),
+      backoff: { baseMs: 1_000, capMs: 60_000 },
+      random: () => 0.999_999,
+    });
+    expect(await worker.runOnce()).toBe(1);
+    const delay = await withSandbox(owner, sandbox, (tx) =>
+      tx
+        .selectFrom('jobs')
+        .select(sql<number>`extract(epoch FROM run_at - updated_at)::float8`.as('seconds'))
+        .where('queue', '=', 'slow-retry')
+        .executeTakeFirstOrThrow(),
+    );
+    expect(delay.seconds).toBeGreaterThan(0.9);
+    expect(delay.seconds).toBeLessThan(1.0);
+  });
+
+  it('dead-letters a job after its last attempt fails', async () => {
+    const sandbox = await createTestSandbox(owner);
+    await withSandbox(db, sandbox, (tx) =>
+      enqueue(tx, { sandboxId: sandbox, queue: 'doomed', payload: {}, maxAttempts: 3 }),
+    );
+    const worker = new Worker({
+      db,
+      id: 'doomed',
+      handlers: handlers({ doomed: () => Promise.reject(new Error('card declined')) }),
+      random: () => 0, // retry immediately so the test does not wait
+    });
+    for (let i = 0; i < 3; i++) expect(await worker.runOnce()).toBe(1);
+    expect(await worker.runOnce()).toBe(0);
+
+    const [job] = await jobsIn(sandbox, 'doomed');
+    expect(job).toMatchObject({
+      status: 'dead',
+      attempts: 3,
+      last_error: 'gave up after 3 attempts: card declined',
+    });
+    expect(job?.finished_at).not.toBeNull();
+  });
+
+  it('dead-letters at once when retrying cannot help', async () => {
+    const sandbox = await createTestSandbox(owner);
+    await addJobs(sandbox, 'hopeless', 1);
+    const worker = new Worker({
+      db,
+      id: 'hopeless',
+      handlers: handlers({
+        hopeless: () => Promise.reject(new PermanentJobError('payload is missing order_id')),
+      }),
+    });
+    expect(await worker.runOnce()).toBe(1);
+    const [job] = await jobsIn(sandbox, 'hopeless');
+    expect(job).toMatchObject({
+      status: 'dead',
+      attempts: 1,
+      last_error: 'payload is missing order_id',
+    });
   });
 
   it('only deduplicates jobs within a sandbox', async () => {

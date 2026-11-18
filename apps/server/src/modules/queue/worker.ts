@@ -1,5 +1,6 @@
 import { withSandbox, type Db, type Job, type Tx } from '@sethu/db';
 import { sql } from 'kysely';
+import { backoffDelayMs, DEFAULT_BACKOFF, type BackoffPolicy } from './backoff.ts';
 import { Waker } from './waker.ts';
 
 export type JobHandler = (tx: Tx, job: Job) => Promise<void>;
@@ -14,6 +15,21 @@ export interface WorkerOptions {
   readonly maxIdleMs?: number;
   readonly waker?: Waker;
   readonly onError?: (error: unknown, job: Job) => void;
+  readonly backoff?: BackoffPolicy;
+  /** Source of jitter. Tests pass a fixed function. */
+  readonly random?: () => number;
+}
+
+/**
+ * Thrown by a handler when retrying cannot help (a malformed payload, an event
+ * that can never apply). The job goes straight to the dead-letter queue with
+ * this message as its reason.
+ */
+export class PermanentJobError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermanentJobError';
+  }
 }
 
 /** The worker's lease on a job was taken over; its transaction must not commit. */
@@ -35,6 +51,8 @@ export class Worker {
   private readonly batchSize: number;
   private readonly maxIdleMs: number;
   private readonly onError: (error: unknown, job: Job) => void;
+  private readonly backoff: BackoffPolicy;
+  private readonly random: () => number;
   private running: Promise<void> | undefined;
   private stopped = false;
 
@@ -48,6 +66,8 @@ export class Worker {
     this.maxIdleMs = options.maxIdleMs ?? 30 * 60_000;
     this.waker = options.waker ?? new Waker();
     this.onError = options.onError ?? (() => undefined);
+    this.backoff = options.backoff ?? DEFAULT_BACKOFF;
+    this.random = options.random ?? Math.random;
   }
 
   /** Claims one batch and processes it. Returns how many jobs it claimed. */
@@ -140,15 +160,26 @@ export class Worker {
     if (row === undefined) throw new LeaseLostError(job.id);
   }
 
+  /**
+   * Retries with jittered backoff, or moves the job to the dead-letter queue
+   * when it has used its attempts or the error says retrying cannot help.
+   */
   private async recordFailure(job: Job, error: unknown): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
+    const dead = error instanceof PermanentJobError || job.attempts >= job.max_attempts;
+    const delayMs = dead ? 0 : backoffDelayMs(job.attempts, this.backoff, this.random);
+    const reason =
+      dead && !(error instanceof PermanentJobError)
+        ? `gave up after ${job.attempts} attempts: ${message}`
+        : message;
     await withSandbox(this.db, job.sandbox_id, async (tx) => {
       await tx
         .updateTable('jobs')
         .set({
-          status: 'queued',
-          run_at: sql<Date>`now() + interval '1 second'`,
-          last_error: message.slice(0, 2000),
+          status: dead ? 'dead' : 'queued',
+          run_at: sql<Date>`now() + make_interval(secs => ${delayMs / 1000})`,
+          finished_at: dead ? sql<Date>`now()` : null,
+          last_error: reason.slice(0, 2000),
           locked_by: null,
           locked_until: null,
           updated_at: sql<Date>`now()`,
