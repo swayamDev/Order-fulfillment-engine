@@ -16,7 +16,8 @@
     "check:repo": "node scripts/check-repo.ts",
     "db:up": "docker compose up -d --wait postgres",
     "db:roles": "node --env-file-if-exists=.env packages/db/src/roles.ts",
-    "db:migrate": "node --env-file-if-exists=.env packages/db/src/migrate.ts"
+    "db:migrate": "node --env-file-if-exists=.env packages/db/src/migrate.ts",
+    "dev": "pnpm --filter @sethu/server dev"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

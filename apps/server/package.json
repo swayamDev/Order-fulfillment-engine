@@ -4,10 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "node --watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "node src/main.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
     "@types/node": "^24.19.2",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.1.5",
+    "@fastify/cors": "^11.4.3",
+    "@sethu/contracts": "workspace:*",
+    "@sethu/db": "workspace:*",
+    "@sethu/domain": "workspace:*",
+    "fastify": "^5.12.8",
+    "kysely": "^0.29.9",
+    "zod": "^4.6.7"
   }
 }
