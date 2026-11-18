@@ -9,6 +9,7 @@ import { problem } from './http/problem.ts';
 import { chaosRoutes } from './modules/chaos/index.ts';
 import { orderRoutes } from './modules/orders/index.ts';
 import { sandboxRoutes, SandboxTokenCodec } from './modules/sandbox/index.ts';
+import { simCourierRoutes, type SimCourierConfig } from './modules/sim-courier/index.ts';
 import { simPaymentsRoutes, type SimPaymentsConfig } from './modules/sim-payments/index.ts';
 import { webhookRoutes } from './modules/webhooks/index.ts';
 
@@ -22,6 +23,8 @@ export interface AppDeps {
   readonly webhookSecrets?: ReadonlyMap<string, readonly string[]>;
   /** Mounts the simulated payment provider's API when set. */
   readonly simPayments?: SimPaymentsConfig;
+  /** Mounts the simulated courier's API when set. */
+  readonly simCourier?: SimCourierConfig;
 }
 
 export async function buildApp({
@@ -31,6 +34,7 @@ export async function buildApp({
   onEventsCommitted = () => undefined,
   webhookSecrets = new Map(),
   simPayments,
+  simCourier,
 }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger, bodyLimit: 64 * 1024 });
 
@@ -67,6 +71,7 @@ export async function buildApp({
   chaosRoutes(app, db, requireSandbox);
   await webhookRoutes(app, { db, secrets: webhookSecrets, onEventsCommitted });
   if (simPayments !== undefined) simPaymentsRoutes(app, db, simPayments, onEventsCommitted);
+  if (simCourier !== undefined) simCourierRoutes(app, db, simCourier, onEventsCommitted);
 
   return app;
 }

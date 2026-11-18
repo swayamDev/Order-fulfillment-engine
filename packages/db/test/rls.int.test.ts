@@ -56,7 +56,7 @@ describe('row level security', () => {
         AND relname NOT LIKE 'kysely_%'
       ORDER BY relname
     `.execute(owner);
-    expect(rows.length).toBeGreaterThanOrEqual(14);
+    expect(rows.length).toBeGreaterThanOrEqual(16);
     for (const row of rows) {
       expect(row, row.relname).toMatchObject({ enabled: true, forced: true });
     }
@@ -78,6 +78,8 @@ describe('row level security', () => {
       'sim_payment_intents',
       'payments',
       'chaos_settings',
+      'shipments',
+      'sim_shipments',
     ] as const;
 
     for (const table of tables) {

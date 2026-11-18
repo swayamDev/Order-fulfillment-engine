@@ -8,7 +8,8 @@ type Timestamp = ColumnType<Date, Date | string | undefined, Date | string>;
 type Json<T = unknown> = ColumnType<T, T, T>;
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'dead';
-export type ReservationStatus = 'held' | 'released' | 'consumed';
+export type ReservationStatus = 'held' | 'released' | 'consumed' | 'returned';
+export type ShipmentStatus = 'created' | 'in_transit' | 'delivered' | 'failed';
 export type SimPaymentStatus = 'authorized' | 'captured' | 'failed' | 'refunded';
 export type PaymentStatus = 'pending' | 'authorized' | 'captured' | 'failed' | 'refunded';
 
@@ -144,7 +145,29 @@ export interface ChaosSettingsTable {
   payments_drop_first: ColumnType<boolean, boolean | undefined, boolean>;
   payments_decline: ColumnType<boolean, boolean | undefined, boolean>;
   payments_extra_delay_ms: ColumnType<number, number | undefined, number>;
+  courier_down: ColumnType<boolean, boolean | undefined, boolean>;
+  courier_fail_delivery: ColumnType<boolean, boolean | undefined, boolean>;
   updated_at: Timestamp;
+}
+
+export interface ShipmentsTable {
+  shipment_id: string;
+  sandbox_id: string;
+  order_id: string;
+  provider: string;
+  status: ColumnType<ShipmentStatus, ShipmentStatus | undefined, ShipmentStatus>;
+  last_seq: ColumnType<number, number | undefined, number>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
+}
+
+export interface SimShipmentsTable {
+  id: string;
+  sandbox_id: string;
+  order_id: string;
+  idempotency_key: string;
+  status: 'booked' | 'delivered' | 'failed';
+  created_at: Timestamp;
 }
 
 export interface SimPaymentIntentsTable {
@@ -175,6 +198,8 @@ export interface Database {
   webhook_inbox: WebhookInboxTable;
   payments: PaymentsTable;
   chaos_settings: ChaosSettingsTable;
+  shipments: ShipmentsTable;
+  sim_shipments: SimShipmentsTable;
   sim_payment_intents: SimPaymentIntentsTable;
 }
 

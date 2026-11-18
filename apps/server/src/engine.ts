@@ -5,8 +5,10 @@ import type { Db } from '@sethu/db';
 import {
   COMPENSATE_CANCELLED,
   COMPENSATE_PAYMENT_FAILED,
+  COMPENSATE_SHIPMENT_FAILED,
   compensateCancelled,
   compensatePaymentFailed,
+  compensateShipmentFailed,
 } from './modules/compensation/index.ts';
 import { RESERVE_INVENTORY, reserveInventory } from './modules/inventory/index.ts';
 import { OutboxRelay, type Subscriptions } from './modules/outbox/index.ts';
@@ -20,6 +22,20 @@ import {
 } from './modules/payments/index.ts';
 import { Worker, type JobHandler, type WorkerOptions } from './modules/queue/index.ts';
 import {
+  applyCourierWebhook,
+  PACK_ORDER,
+  packOrder,
+  SHIP_ORDER,
+  shipOrder,
+  type CourierClient,
+} from './modules/shipping/index.ts';
+import {
+  DELIVER_SIM_COURIER_WEBHOOK,
+  deliverSimCourierWebhook,
+  SIM_COURIER,
+  type SimCourierConfig,
+} from './modules/sim-courier/index.ts';
+import {
   DELIVER_SIM_PAYMENT_WEBHOOK,
   deliverSimPaymentWebhook,
   SIM_PAYMENTS,
@@ -27,33 +43,55 @@ import {
 } from './modules/sim-payments/index.ts';
 import { PROCESS_WEBHOOK, processWebhook } from './modules/webhooks/index.ts';
 
+/** Which consumers react to which order events. */
 export const SUBSCRIPTIONS: Subscriptions = new Map([
   ['order.placed', [RESERVE_INVENTORY]],
   ['order.inventory_reserved', [REQUEST_PAYMENT]],
   ['order.payment_failed', [COMPENSATE_PAYMENT_FAILED]],
+  ['order.paid', [PACK_ORDER]],
+  ['order.packed', [SHIP_ORDER]],
+  ['order.shipment_failed', [COMPENSATE_SHIPMENT_FAILED]],
   ['order.cancelled', [COMPENSATE_CANCELLED]],
 ]);
 
 export interface EngineDeps {
-  /** The simulated payment provider's delivery worker runs here too. */
-  readonly simPayments?: SimPaymentsConfig;
-  /** Client for the payment provider's API; without it no payment is requested. */
+  /** Client for the payment provider; without it no payment is requested. */
   readonly payments?: PaymentsClient;
+  /**
+   * Client for the courier. Fulfillment (packing and shipping) runs only when
+   * one is configured; without it, paid orders wait at paid.
+   */
+  readonly courier?: CourierClient;
+  /** The simulated providers' delivery workers run in the engine too. */
+  readonly simPayments?: SimPaymentsConfig;
+  readonly simCourier?: SimCourierConfig;
 }
 
 export function buildHandlers(deps: EngineDeps = {}): Map<string, JobHandler> {
+  const processors = new Map([
+    [SIM_PAYMENTS, applyPaymentWebhook],
+    [SIM_COURIER, applyCourierWebhook],
+  ]);
   const handlers = new Map<string, JobHandler>([
     [RESERVE_INVENTORY, reserveInventory],
     [COMPENSATE_PAYMENT_FAILED, compensatePaymentFailed],
     [COMPENSATE_CANCELLED, compensateCancelled],
-    [PROCESS_WEBHOOK, processWebhook(new Map([[SIM_PAYMENTS, applyPaymentWebhook]]))],
+    [COMPENSATE_SHIPMENT_FAILED, compensateShipmentFailed],
+    [PROCESS_WEBHOOK, processWebhook(processors)],
   ]);
   if (deps.payments !== undefined) {
     handlers.set(REQUEST_PAYMENT, requestPayment(deps.payments));
     handlers.set(REFUND_PAYMENT, refundPayment(deps.payments));
   }
+  if (deps.courier !== undefined) {
+    handlers.set(PACK_ORDER, packOrder);
+    handlers.set(SHIP_ORDER, shipOrder(deps.courier));
+  }
   if (deps.simPayments !== undefined) {
     handlers.set(DELIVER_SIM_PAYMENT_WEBHOOK, deliverSimPaymentWebhook(deps.simPayments));
+  }
+  if (deps.simCourier !== undefined) {
+    handlers.set(DELIVER_SIM_COURIER_WEBHOOK, deliverSimCourierWebhook(deps.simCourier));
   }
   return handlers;
 }

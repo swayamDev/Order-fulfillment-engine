@@ -16,6 +16,10 @@ export interface ChaosSettings {
   readonly paymentsDecline: boolean;
   /** Extra wait before each payment webhook. */
   readonly paymentsExtraDelayMs: number;
+  /** The courier's API answers 503 to every booking. */
+  readonly courierDown: boolean;
+  /** The courier loses the parcel: shipment.failed instead of delivered. */
+  readonly courierFailDelivery: boolean;
 }
 
 export const NO_CHAOS: ChaosSettings = {
@@ -24,6 +28,8 @@ export const NO_CHAOS: ChaosSettings = {
   paymentsDropFirst: false,
   paymentsDecline: false,
   paymentsExtraDelayMs: 0,
+  courierDown: false,
+  courierFailDelivery: false,
 };
 
 export const ChaosPatch = z
@@ -33,6 +39,8 @@ export const ChaosPatch = z
     paymentsDropFirst: z.boolean(),
     paymentsDecline: z.boolean(),
     paymentsExtraDelayMs: z.number().int().min(0).max(60_000),
+    courierDown: z.boolean(),
+    courierFailDelivery: z.boolean(),
   })
   .partial()
   .strict();
@@ -47,6 +55,8 @@ export async function readChaos(tx: Tx): Promise<ChaosSettings> {
     paymentsDropFirst: row.payments_drop_first,
     paymentsDecline: row.payments_decline,
     paymentsExtraDelayMs: row.payments_extra_delay_ms,
+    courierDown: row.courier_down,
+    courierFailDelivery: row.courier_fail_delivery,
   };
 }
 
@@ -63,6 +73,8 @@ export async function updateChaos(
       payments_drop_first: next.paymentsDropFirst,
       payments_decline: next.paymentsDecline,
       payments_extra_delay_ms: next.paymentsExtraDelayMs,
+      courier_down: next.courierDown,
+      courier_fail_delivery: next.courierFailDelivery,
       updated_at: sql<Date>`now()`,
     };
     await tx

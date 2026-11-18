@@ -4,14 +4,14 @@
 // real HTTP. Everything it sends is labelled simulated.
 
 import { randomUUID } from 'node:crypto';
-import { withSandbox, type Db, type Job, type Tx } from '@sethu/db';
+import { withSandbox, type Db, type Tx } from '@sethu/db';
 import type { FastifyInstance } from 'fastify';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { problem } from '../../http/problem.ts';
 import { readChaos } from '../chaos/index.ts';
-import { enqueue, PermanentJobError } from '../queue/index.ts';
-import { signatureHeader, SIGNATURE_HEADER } from '../webhooks/index.ts';
+import { enqueue } from '../queue/index.ts';
+import { deliverSignedWebhook } from '../sim-shared/index.ts';
 
 export const SIM_PAYMENTS = 'sim-payments';
 export const DELIVER_SIM_PAYMENT_WEBHOOK = 'sim-payments.deliver';
@@ -42,17 +42,6 @@ export interface IntentResponse {
   currency: string;
   simulated: true;
 }
-
-const DeliveryPayload = z.object({
-  envelope: z.object({
-    id: z.string(),
-    type: z.string(),
-    created: z.number(),
-    sandbox_id: z.uuid(),
-    simulated: z.literal(true),
-    data: z.record(z.string(), z.unknown()),
-  }),
-});
 
 /** The provider's public API: POST /sim/payments/v1/intents. */
 export function simPaymentsRoutes(
@@ -262,27 +251,7 @@ async function scheduleOutcome(
   };
 }
 
-/** Job handler: POST one signed webhook. A non-2xx answer throws, so the queue retries with backoff. */
+/** Job handler: deliver one of this provider's signed webhooks. */
 export function deliverSimPaymentWebhook(config: SimPaymentsConfig) {
-  return async (_tx: Tx, job: Job): Promise<void> => {
-    const parsed = DeliveryPayload.safeParse(job.payload);
-    if (!parsed.success) throw new PermanentJobError('sim-payments.deliver: bad payload');
-    const body = JSON.stringify(parsed.data.envelope);
-    const response = await fetch(config.webhookUrl(), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        [SIGNATURE_HEADER]: signatureHeader(
-          [config.signingSecret],
-          Math.floor(Date.now() / 1000),
-          body,
-        ),
-      },
-      body,
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!response.ok) {
-      throw new Error(`Webhook endpoint answered ${response.status}`);
-    }
-  };
+  return deliverSignedWebhook(config);
 }

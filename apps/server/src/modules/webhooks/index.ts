@@ -13,3 +13,4 @@ export {
   verifySignature,
   type VerifyResult,
 } from './signature.ts';
+export { checkSequence, MAX_HOLD_MS, releaseNext, type SequenceVerdict } from './sequencing.ts';

@@ -1,5 +1,5 @@
 import type { Job, Tx } from '@sethu/db';
-import { releaseReservation } from '../inventory/index.ts';
+import { releaseReservation, returnToStock } from '../inventory/index.ts';
 import { markProcessed, type OutboxMessage } from '../outbox/index.ts';
 import { appendOrderEvent, lockOrder, transitionOrder } from '../orders/index.ts';
 import { requestRefund } from '../payments/index.ts';
@@ -7,6 +7,7 @@ import { PermanentJobError } from '../queue/index.ts';
 
 export const COMPENSATE_PAYMENT_FAILED = 'compensation.payment-failed';
 export const COMPENSATE_CANCELLED = 'compensation.cancelled';
+export const COMPENSATE_SHIPMENT_FAILED = 'compensation.shipment-failed';
 
 async function begin(tx: Tx, job: Job, consumer: string) {
   const message = job.payload as unknown as OutboxMessage;
@@ -33,8 +34,8 @@ export async function compensatePaymentFailed(tx: Tx, job: Job): Promise<void> {
 }
 
 /**
- * On order.cancelled, however it got there: give back any stock still held,
- * and refund the payment if money was captured.
+ * On order.cancelled, however it got there: give back any stock still held or
+ * already packed, and refund the payment if money was captured.
  */
 export async function compensateCancelled(tx: Tx, job: Job): Promise<void> {
   const order = await begin(tx, job, COMPENSATE_CANCELLED);
@@ -42,7 +43,24 @@ export async function compensateCancelled(tx: Tx, job: Job): Promise<void> {
   if (await releaseReservation(tx, order.id)) {
     await appendOrderEvent(tx, order, 'compensation', { action: 'stock_released' });
   }
+  if (await returnToStock(tx, order.id)) {
+    await appendOrderEvent(tx, order, 'compensation', { action: 'packed_stock_returned' });
+  }
   if (order.payment_captured) {
     await requestRefund(tx, order, 'order cancelled after payment');
   }
+}
+
+/**
+ * On order.shipment_failed: the courier returned the parcel. Put the units
+ * back on the shelf and refund the customer; the refund webhook then moves
+ * the order to refunded.
+ */
+export async function compensateShipmentFailed(tx: Tx, job: Job): Promise<void> {
+  const order = await begin(tx, job, COMPENSATE_SHIPMENT_FAILED);
+  if (order?.state !== 'shipment_failed') return;
+  if (await returnToStock(tx, order.id)) {
+    await appendOrderEvent(tx, order, 'compensation', { action: 'returned_parcel_restocked' });
+  }
+  await requestRefund(tx, order, 'shipment failed');
 }
