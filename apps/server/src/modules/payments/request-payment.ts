@@ -38,6 +38,16 @@ export function requestPayment(client: PaymentsClient) {
       currency: order.currency,
       idempotencyKey: `order:${order.id}:charge`,
     });
+    await tx
+      .insertInto('payments')
+      .values({
+        intent_id: intent.id,
+        sandbox_id: order.sandbox_id,
+        order_id: order.id,
+        provider: 'sim-payments',
+      })
+      .onConflict((oc) => oc.column('intent_id').doNothing())
+      .execute();
     await transitionOrder(tx, order, 'payment_pending', {
       cause: { by: REQUEST_PAYMENT, intentId: intent.id, provider: 'sim-payments' },
     });

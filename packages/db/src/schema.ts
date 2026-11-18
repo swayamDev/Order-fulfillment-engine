@@ -10,6 +10,7 @@ type Json<T = unknown> = ColumnType<T, T, T>;
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'dead';
 export type ReservationStatus = 'held' | 'released' | 'consumed';
 export type SimPaymentStatus = 'authorized' | 'captured' | 'failed';
+export type PaymentStatus = 'pending' | 'authorized' | 'captured' | 'failed' | 'refunded';
 
 export interface SandboxesTable {
   id: Generated<string>;
@@ -122,6 +123,18 @@ export interface WebhookInboxTable {
   received_at: Timestamp;
   duplicate_count: ColumnType<number, number | undefined, number>;
   processed_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+  held_at: ColumnType<Date | null, Date | string | null | undefined, Date | string | null>;
+}
+
+export interface PaymentsTable {
+  intent_id: string;
+  sandbox_id: string;
+  order_id: string;
+  provider: string;
+  status: ColumnType<PaymentStatus, PaymentStatus | undefined, PaymentStatus>;
+  last_seq: ColumnType<number, number | undefined, number>;
+  created_at: Timestamp;
+  updated_at: Timestamp;
 }
 
 export interface SimPaymentIntentsTable {
@@ -148,6 +161,7 @@ export interface Database {
   jobs: JobsTable;
   processed_messages: ProcessedMessagesTable;
   webhook_inbox: WebhookInboxTable;
+  payments: PaymentsTable;
   sim_payment_intents: SimPaymentIntentsTable;
 }
 

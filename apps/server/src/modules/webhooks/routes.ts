@@ -104,6 +104,8 @@ export async function webhookRoutes(app: FastifyInstance, deps: WebhookRouteDeps
             queue: PROCESS_WEBHOOK,
             payload: { inboxId: row.id, provider, type: envelope.type },
             dedupeKey: `webhook:${row.id}`,
+            // Enough attempts to wait out a held, out-of-order event.
+            maxAttempts: 8,
           });
         }
         return row;

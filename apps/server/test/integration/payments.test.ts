@@ -89,18 +89,17 @@ describe('payment flow, placed to paid', () => {
       .map((e) => e.data['to']);
     expect(transitions).toEqual(['placed', 'inventory_reserved', 'payment_pending', 'paid']);
 
-    // Both webhooks are on the timeline. With two workers their processing can
-    // race: captured may win the order lock first, and then authorized is
-    // recorded as ignored. Either way the order ends paid exactly once.
-    const outcomes = Object.fromEntries(
-      order.events
-        .filter((e) => e.kind === 'webhook')
-        .map((e) => [String(e.data['type']), String(e.data['outcome'])]),
-    );
-    expect(outcomes['payment.captured']).toBe('apply');
-    expect(['noted', 'ignored']).toContain(outcomes['payment.authorized']);
-    const webhooks = order.events.filter((e) => e.kind === 'webhook');
-    expect(webhooks.every((w) => w.data['simulated'] === true)).toBe(true);
+    // Per-payment sequencing makes the order of application deterministic,
+    // even with two workers racing: authorized (1) always before captured (2).
+    const webhooks = order.events
+      .filter((e) => e.kind === 'webhook')
+      .map((e) => `${String(e.data['type'])} ${String(e.data['outcome'])}`);
+    expect(webhooks.filter((w) => !w.endsWith('held'))).toEqual([
+      'payment.authorized noted',
+      'payment.captured apply',
+    ]);
+    const webhookEvents = order.events.filter((e) => e.kind === 'webhook');
+    expect(webhookEvents.every((w) => w.data['simulated'] === true)).toBe(true);
 
     const { intents, inbox } = await sandboxRows(sandbox);
     expect(intents).toHaveLength(1);
