@@ -137,6 +137,16 @@ export interface PaymentsTable {
   updated_at: Timestamp;
 }
 
+export interface ChaosSettingsTable {
+  sandbox_id: string;
+  payments_duplicate: ColumnType<boolean, boolean | undefined, boolean>;
+  payments_reverse_order: ColumnType<boolean, boolean | undefined, boolean>;
+  payments_drop_first: ColumnType<boolean, boolean | undefined, boolean>;
+  payments_decline: ColumnType<boolean, boolean | undefined, boolean>;
+  payments_extra_delay_ms: ColumnType<number, number | undefined, number>;
+  updated_at: Timestamp;
+}
+
 export interface SimPaymentIntentsTable {
   id: string;
   sandbox_id: string;
@@ -162,6 +172,7 @@ export interface Database {
   processed_messages: ProcessedMessagesTable;
   webhook_inbox: WebhookInboxTable;
   payments: PaymentsTable;
+  chaos_settings: ChaosSettingsTable;
   sim_payment_intents: SimPaymentIntentsTable;
 }
 

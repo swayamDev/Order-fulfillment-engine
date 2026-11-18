@@ -56,7 +56,7 @@ describe('row level security', () => {
         AND relname NOT LIKE 'kysely_%'
       ORDER BY relname
     `.execute(owner);
-    expect(rows.length).toBeGreaterThanOrEqual(13);
+    expect(rows.length).toBeGreaterThanOrEqual(14);
     for (const row of rows) {
       expect(row, row.relname).toMatchObject({ enabled: true, forced: true });
     }
@@ -77,6 +77,7 @@ describe('row level security', () => {
       'webhook_inbox',
       'sim_payment_intents',
       'payments',
+      'chaos_settings',
     ] as const;
 
     for (const table of tables) {

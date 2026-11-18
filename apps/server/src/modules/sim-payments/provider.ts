@@ -8,6 +8,7 @@ import { withSandbox, type Db, type Job, type Tx } from '@sethu/db';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { problem } from '../../http/problem.ts';
+import { readChaos } from '../chaos/index.ts';
 import { enqueue, PermanentJobError } from '../queue/index.ts';
 import { signatureHeader, SIGNATURE_HEADER } from '../webhooks/index.ts';
 
@@ -111,9 +112,10 @@ export function simPaymentsRoutes(
 }
 
 /**
- * Queues the webhooks this payment will produce. Phase 1 always succeeds:
- * payment.authorized, then payment.captured. The chaos panel will later
- * change outcomes, order, duplication and timing here.
+ * Queues the webhooks this payment will produce. Normally payment.authorized
+ * (sequence 1) then payment.captured (sequence 2). The sandbox's chaos
+ * settings, read in the same transaction, can make the provider decline,
+ * deliver twice, deliver in reverse, lose the first event, or wait longer.
  */
 async function scheduleOutcome(
   tx: Tx,
@@ -126,31 +128,42 @@ async function scheduleOutcome(
     currency: string;
   },
 ): Promise<void> {
-  const types = ['payment.authorized', 'payment.captured'];
-  for (const [i, type] of types.entries()) {
-    const envelope = {
-      id: `evt_sim_${randomUUID().replaceAll('-', '').slice(0, 20)}`,
-      type,
-      created: Math.floor(Date.now() / 1000),
-      sandbox_id: intent.sandbox_id,
-      simulated: true as const,
-      data: {
-        intent_id: intent.id,
-        order_id: intent.order_id,
-        amount_minor: intent.amount_minor,
-        currency: intent.currency,
-        sequence: i + 1,
-      },
-    };
-    await enqueue(tx, {
-      sandboxId: intent.sandbox_id,
-      queue: DELIVER_SIM_PAYMENT_WEBHOOK,
-      payload: { envelope },
-      dedupeKey: `sim-deliver:${envelope.id}`,
-      // At least 1 ms apart so they are claimed in order even with no delay.
-      delayMs: config.delayMs * (i + 1) + i,
-      maxAttempts: 8,
-    });
+  const chaos = await readChaos(tx);
+  const types = chaos.paymentsDecline
+    ? ['payment.failed']
+    : ['payment.authorized', 'payment.captured'];
+  const events = types.map((type, i) => ({
+    id: `evt_sim_${randomUUID().replaceAll('-', '').slice(0, 20)}`,
+    type,
+    created: Math.floor(Date.now() / 1000),
+    sandbox_id: intent.sandbox_id,
+    simulated: true as const,
+    data: {
+      intent_id: intent.id,
+      order_id: intent.order_id,
+      amount_minor: intent.amount_minor,
+      currency: intent.currency,
+      sequence: i + 1,
+    },
+  }));
+
+  const delivered = chaos.paymentsDropFirst ? events.slice(1) : events;
+  const ordered = chaos.paymentsReverseOrder ? [...delivered].reverse() : delivered;
+  const copies = chaos.paymentsDuplicate ? 2 : 1;
+  const gap = config.delayMs + chaos.paymentsExtraDelayMs;
+
+  for (const [slot, envelope] of ordered.entries()) {
+    for (let copy = 0; copy < copies; copy++) {
+      await enqueue(tx, {
+        sandboxId: intent.sandbox_id,
+        queue: DELIVER_SIM_PAYMENT_WEBHOOK,
+        payload: { envelope },
+        dedupeKey: `sim-deliver:${envelope.id}:${copy}`,
+        // Slots at least 2 ms apart so deliveries are claimed in the intended order.
+        delayMs: gap * (slot + 1) + slot * 2 + copy,
+        maxAttempts: 8,
+      });
+    }
   }
 }
 

@@ -6,6 +6,7 @@ import { ZodError } from 'zod';
 import type { Config } from './config.ts';
 import { registerWriteGuards } from './http/guards.ts';
 import { problem } from './http/problem.ts';
+import { chaosRoutes } from './modules/chaos/index.ts';
 import { orderRoutes } from './modules/orders/index.ts';
 import { sandboxRoutes, SandboxTokenCodec } from './modules/sandbox/index.ts';
 import { simPaymentsRoutes, type SimPaymentsConfig } from './modules/sim-payments/index.ts';
@@ -63,6 +64,7 @@ export async function buildApp({
   app.get('/v1/health', () => ({ ok: true }));
   const requireSandbox = sandboxRoutes(app, db, new SandboxTokenCodec(config.SESSION_SIGNING_KEYS));
   orderRoutes(app, { db, requireSandbox, onEventsCommitted });
+  chaosRoutes(app, db, requireSandbox);
   await webhookRoutes(app, { db, secrets: webhookSecrets, onEventsCommitted });
   if (simPayments !== undefined) simPaymentsRoutes(app, db, simPayments, onEventsCommitted);
 
