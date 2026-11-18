@@ -4,6 +4,7 @@ export {
   webhookRoutes,
   type WebhookRouteDeps,
 } from './routes.ts';
+export { processWebhook, type InboxEventView, type WebhookProcessor } from './process.ts';
 export {
   computeSignature,
   DEFAULT_TOLERANCE_SECONDS,

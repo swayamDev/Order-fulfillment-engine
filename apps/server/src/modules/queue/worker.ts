@@ -3,6 +3,9 @@ import { sql } from 'kysely';
 import { backoffDelayMs, DEFAULT_BACKOFF, type BackoffPolicy } from './backoff.ts';
 import { Waker } from './waker.ts';
 
+/** How long a failing loop waits before trying the database again. */
+export const LOOP_BACKOFF: BackoffPolicy = { baseMs: 500, capMs: 30_000 };
+
 export type JobHandler = (tx: Tx, job: Job) => Promise<void>;
 
 export interface WorkerOptions {
@@ -15,6 +18,13 @@ export interface WorkerOptions {
   readonly maxIdleMs?: number;
   readonly waker?: Waker;
   readonly onError?: (error: unknown, job: Job) => void;
+  /**
+   * Called after a job's transaction commits. Handlers may have written outbox
+   * events or new jobs, so the engine uses this to wake the relay and workers.
+   */
+  readonly onCommitted?: (job: Job) => void;
+  /** Called when claiming or reaping fails; the loop then waits and retries. */
+  readonly onLoopError?: (error: unknown) => void;
   readonly backoff?: BackoffPolicy;
   /** Source of jitter. Tests pass a fixed function. */
   readonly random?: () => number;
@@ -51,6 +61,8 @@ export class Worker {
   private readonly batchSize: number;
   private readonly maxIdleMs: number;
   private readonly onError: (error: unknown, job: Job) => void;
+  private readonly onLoopError: (error: unknown) => void;
+  private readonly onCommitted: (job: Job) => void;
   private readonly backoff: BackoffPolicy;
   private readonly random: () => number;
   private running: Promise<void> | undefined;
@@ -66,6 +78,8 @@ export class Worker {
     this.maxIdleMs = options.maxIdleMs ?? 30 * 60_000;
     this.waker = options.waker ?? new Waker();
     this.onError = options.onError ?? (() => undefined);
+    this.onLoopError = options.onLoopError ?? (() => undefined);
+    this.onCommitted = options.onCommitted ?? (() => undefined);
     this.backoff = options.backoff ?? DEFAULT_BACKOFF;
     this.random = options.random ?? Math.random;
   }
@@ -98,11 +112,21 @@ export class Worker {
   }
 
   private async loop(): Promise<void> {
+    let failures = 0;
     while (!this.stopped) {
-      const claimed = await this.runOnce();
-      if (claimed > 0) continue;
-      await this.reap();
-      await this.waker.sleep(await this.idleDelayMs());
+      try {
+        const claimed = await this.runOnce();
+        failures = 0;
+        if (claimed > 0) continue;
+        await this.reap();
+        await this.waker.sleep(await this.idleDelayMs());
+      } catch (error) {
+        // The database went away (a dropped connection, Neon resuming from
+        // zero). Keep the process alive and try again after a pause.
+        failures++;
+        this.onLoopError(error);
+        await this.waker.sleep(backoffDelayMs(failures, LOOP_BACKOFF) + 100);
+      }
     }
   }
 
@@ -136,6 +160,7 @@ export class Worker {
           .where('id', '=', job.id)
           .execute();
       });
+      this.onCommitted(job);
     } catch (error) {
       if (error instanceof LeaseLostError) return;
       this.onError(error, job);

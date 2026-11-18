@@ -3,6 +3,7 @@ export { enqueue, type EnqueueInput } from './enqueue.ts';
 export { Waker } from './waker.ts';
 export {
   LeaseLostError,
+  LOOP_BACKOFF,
   PermanentJobError,
   Worker,
   type JobHandler,

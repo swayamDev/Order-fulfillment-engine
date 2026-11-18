@@ -53,7 +53,12 @@ const DeliveryPayload = z.object({
 });
 
 /** The provider's public API: POST /sim/payments/v1/intents. */
-export function simPaymentsRoutes(app: FastifyInstance, db: Db, config: SimPaymentsConfig): void {
+export function simPaymentsRoutes(
+  app: FastifyInstance,
+  db: Db,
+  config: SimPaymentsConfig,
+  onJobsQueued: () => void,
+): void {
   app.post('/sim/payments/v1/intents', async (request, reply) => {
     reply.header('x-sethu-simulated', 'true');
     if (request.headers.authorization !== `Bearer ${config.apiKey}`) {
@@ -92,6 +97,7 @@ export function simPaymentsRoutes(app: FastifyInstance, db: Db, config: SimPayme
       return { intent: existing, replayed: true };
     });
 
+    if (!result.replayed) onJobsQueued();
     const response: IntentResponse = {
       id: result.intent.id,
       status: 'processing',

@@ -1,6 +1,6 @@
 import { setSandbox, type Db, type OutboxRow } from '@sethu/db';
 import { sql } from 'kysely';
-import { enqueue, Waker } from '../queue/index.ts';
+import { backoffDelayMs, enqueue, LOOP_BACKOFF, Waker } from '../queue/index.ts';
 import type { OutboxMessage } from './publish.ts';
 
 /** Which consumer queues receive each topic. */
@@ -14,6 +14,8 @@ export interface RelayOptions {
   readonly waker?: Waker;
   /** Called after a batch commits, so workers (and later the live stream) can wake. */
   readonly onPublished?: (events: readonly OutboxRow[]) => void;
+  /** Called when a relay pass fails; the loop then waits and retries. */
+  readonly onLoopError?: (error: unknown) => void;
 }
 
 /**
@@ -29,6 +31,7 @@ export class OutboxRelay {
   private readonly batchSize: number;
   private readonly maxIdleMs: number;
   private readonly onPublished: (events: readonly OutboxRow[]) => void;
+  private readonly onLoopError: (error: unknown) => void;
   private running: Promise<void> | undefined;
   private stopped = false;
 
@@ -39,6 +42,7 @@ export class OutboxRelay {
     this.maxIdleMs = options.maxIdleMs ?? 30 * 60_000;
     this.waker = options.waker ?? new Waker();
     this.onPublished = options.onPublished ?? (() => undefined);
+    this.onLoopError = options.onLoopError ?? (() => undefined);
   }
 
   /** Relays one batch. Returns how many events it published. */
@@ -88,9 +92,18 @@ export class OutboxRelay {
   }
 
   private async loop(): Promise<void> {
+    let failures = 0;
     while (!this.stopped) {
-      if ((await this.runOnce()) > 0) continue;
-      await this.waker.sleep(this.maxIdleMs);
+      try {
+        const published = await this.runOnce();
+        failures = 0;
+        if (published > 0) continue;
+        await this.waker.sleep(this.maxIdleMs);
+      } catch (error) {
+        failures++;
+        this.onLoopError(error);
+        await this.waker.sleep(backoffDelayMs(failures, LOOP_BACKOFF) + 100);
+      }
     }
   }
 }

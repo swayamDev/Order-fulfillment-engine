@@ -64,7 +64,7 @@ export async function buildApp({
   sandboxRoutes(app, db);
   orderRoutes(app, { db, onEventsCommitted });
   await webhookRoutes(app, { db, secrets: webhookSecrets, onEventsCommitted });
-  if (simPayments !== undefined) simPaymentsRoutes(app, db, simPayments);
+  if (simPayments !== undefined) simPaymentsRoutes(app, db, simPayments, onEventsCommitted);
 
   return app;
 }
