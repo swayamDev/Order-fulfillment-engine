@@ -10,6 +10,7 @@ const app = await buildApp({
   config,
   db,
   logger: true,
+  webhookSecrets: new Map([['sim-payments', config.SIM_PAYMENTS_WEBHOOK_SECRETS]]),
   onEventsCommitted: () => {
     engine.notify();
   },

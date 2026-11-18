@@ -8,6 +8,7 @@ import { registerWriteGuards } from './http/guards.ts';
 import { problem } from './http/problem.ts';
 import { orderRoutes } from './modules/orders/index.ts';
 import { sandboxRoutes } from './modules/sandbox/index.ts';
+import { webhookRoutes } from './modules/webhooks/index.ts';
 
 export interface AppDeps {
   readonly config: Pick<Config, 'CONSOLE_ORIGIN'>;
@@ -15,6 +16,8 @@ export interface AppDeps {
   readonly logger?: boolean;
   /** Called after a request commits outbox events, to wake the relay. */
   readonly onEventsCommitted?: () => void;
+  /** Accepted webhook secrets per provider. */
+  readonly webhookSecrets?: ReadonlyMap<string, readonly string[]>;
 }
 
 export async function buildApp({
@@ -22,6 +25,7 @@ export async function buildApp({
   db,
   logger = false,
   onEventsCommitted = () => undefined,
+  webhookSecrets = new Map(),
 }: AppDeps): Promise<FastifyInstance> {
   const app = Fastify({ logger, bodyLimit: 64 * 1024 });
 
@@ -55,6 +59,7 @@ export async function buildApp({
   app.get('/v1/health', () => ({ ok: true }));
   sandboxRoutes(app, db);
   orderRoutes(app, { db, onEventsCommitted });
+  await webhookRoutes(app, { db, secrets: webhookSecrets, onEventsCommitted });
 
   return app;
 }
